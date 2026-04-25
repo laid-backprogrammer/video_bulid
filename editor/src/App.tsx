@@ -110,6 +110,19 @@ type TtsStatus = {
   logs: string[];
 };
 
+type CodegenStatus = {
+  running: boolean;
+  sceneId: string | null;
+  step: string;
+  message: string;
+  startTime: number | null;
+  endTime: number | null;
+  targetFile: string | null;
+  error: string | null;
+  result: {sceneId?: string; targetFile?: string; checked?: boolean; dryRun?: boolean} | null;
+  logs: string[];
+};
+
 type LlmStreamFields = {
   streamLogs?: string[];
   thinking?: string;
@@ -261,6 +274,7 @@ export default function App() {
   const [pipeline, setPipeline] = useState<PipelineStatus | null>(null);
   const [render, setRender] = useState<RenderStatus | null>(null);
   const [ttsStatus, setTtsStatus] = useState<TtsStatus | null>(null);
+  const [codegen, setCodegen] = useState<CodegenStatus | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [busy, setBusy] = useState<BusyAction>(null);
   const [selectedId, setSelectedId] = useState<string>('');
@@ -271,6 +285,7 @@ export default function App() {
   const logsRef = useRef<HTMLDivElement>(null);
   const renderPollErrorRef = useRef<string | null>(null);
   const ttsPollErrorRef = useRef<string | null>(null);
+  const codegenPollErrorRef = useRef<string | null>(null);
   const pipelineStreamErrorRef = useRef<string | null>(null);
 
   const selectedScene = useMemo(
@@ -344,6 +359,27 @@ export default function App() {
       endTime: Date.now(),
       error: message,
       logs: isNew ? [...(current?.logs ?? []), `[${new Date().toLocaleTimeString()}] 语音状态刷新失败：${message}`].slice(-120) : (current?.logs ?? []),
+    }));
+  }, [pushLog]);
+
+  const noteCodegenStatusError = useCallback((error: unknown) => {
+    const message = getErrorMessage(error);
+    const isNew = codegenPollErrorRef.current !== message;
+    if (isNew) {
+      pushLog(`Remotion 代码生成状态刷新失败：${message}`);
+      codegenPollErrorRef.current = message;
+    }
+    setCodegen((current) => ({
+      running: false,
+      sceneId: current?.sceneId ?? null,
+      step: 'failed',
+      message: 'Remotion 代码生成状态刷新失败',
+      startTime: current?.startTime ?? null,
+      endTime: Date.now(),
+      targetFile: current?.targetFile ?? null,
+      error: message,
+      result: current?.result ?? null,
+      logs: isNew ? [...(current?.logs ?? []), `[${new Date().toLocaleTimeString()}] Remotion 代码生成状态刷新失败：${message}`].slice(-160) : (current?.logs ?? []),
     }));
   }, [pushLog]);
 
@@ -458,8 +494,36 @@ export default function App() {
   }, [noteTtsStatusError, pushLog, refresh]);
 
   useEffect(() => {
+    let wasRunning = false;
+    const poll = async () => {
+      try {
+        const status = await fetchJson<CodegenStatus>('/api/scene/codegen/status');
+        setCodegen(status);
+        if (codegenPollErrorRef.current) {
+          pushLog('Remotion 代码生成状态刷新已恢复');
+          codegenPollErrorRef.current = null;
+        }
+        if (status.running || wasRunning) {
+          await refresh();
+          if (!status.running && wasRunning && !status.error) {
+            setCacheKey(Date.now());
+            pushLog(`${status.sceneId ?? '当前场景'} Remotion 代码生成完成`);
+          }
+        }
+        wasRunning = status.running;
+      } catch (error) {
+        wasRunning = false;
+        noteCodegenStatusError(error);
+      }
+    };
+    poll();
+    const timer = setInterval(poll, 1000);
+    return () => clearInterval(timer);
+  }, [noteCodegenStatusError, pushLog, refresh]);
+
+  useEffect(() => {
     if (logsRef.current) logsRef.current.scrollTop = logsRef.current.scrollHeight;
-  }, [logs, render?.logs]);
+  }, [logs, render?.logs, codegen?.logs]);
 
   const runAction = async (name: string, action: () => Promise<void>) => {
     setBusy(name);
@@ -508,6 +572,15 @@ export default function App() {
       const cueCount = result.result?.cues?.length ?? 0;
       const wordCount = result.result?.cues?.reduce((sum, cue) => sum + (cue.words?.length ?? 0), 0) ?? 0;
       pushLog(`${sceneId} 已重新对齐时间轴：${cueCount} 个片段 / ${wordCount} 个词`);
+    });
+
+  const runSceneCodegen = (sceneId: string) =>
+    runAction(`生成 Remotion 代码 ${sceneId}`, async () => {
+      await postJson('/api/scene/codegen', {sceneId, repairs: 1, check: true});
+      const status = await fetchJson<CodegenStatus>('/api/scene/codegen/status');
+      setCodegen(status);
+      pushLog(`${sceneId} 已启动 Remotion 代码生成`);
+      setStep('design');
     });
 
   const runScenePipeline = (sceneId: string) =>
@@ -659,7 +732,7 @@ export default function App() {
   };
 
   /* ---------- status ---------- */
-  const anyRunning = Boolean(busy || pipeline?.running || render?.running || ttsStatus?.running || modal?.loading);
+  const anyRunning = Boolean(busy || pipeline?.running || render?.running || ttsStatus?.running || codegen?.running || modal?.loading);
   const ttsPercent = ttsStatus?.total
     ? Math.round((ttsStatus.done / ttsStatus.total) * 100)
     : ttsStatus?.running
@@ -673,6 +746,7 @@ export default function App() {
       : ttsStatus?.message ?? '未开始';
   const isTtsActiveForScene = (sceneId: string) =>
     Boolean(ttsStatus?.running && (ttsStatus.mode === 'all' || ttsStatus.currentSceneId === sceneId || ttsStatus.sceneId === sceneId));
+  const isCodegenActiveForScene = (sceneId: string) => Boolean(codegen?.running && codegen.sceneId === sceneId);
 
   const progress = render?.progress;
   const progressText = progress
@@ -684,12 +758,14 @@ export default function App() {
       ? '弹窗任务正在运行'
       : ttsStatus?.running
         ? `语音生成中：${ttsStatusText}`
-        : render?.running
+        : codegen?.running
+          ? `Remotion 代码生成中：${codegen.message}`
+          : render?.running
           ? `渲染运行中：${progressText}`
           : pipeline?.running
             ? '流水线运行中'
             : null;
-  const statusProblem = ttsStatus?.error || render?.error || null;
+  const statusProblem = ttsStatus?.error || codegen?.error || render?.error || null;
 
   const completedScenes = scenes.filter((s) => s.audioExists && s.captionExists).length;
   const totalScenes = scenes.length;
@@ -825,6 +901,7 @@ export default function App() {
               const isSelected = selectedId === scene.id;
               const progress = status ? getSceneProgress(status) : 0;
               const ttsLive = isTtsActiveForScene(scene.id);
+              const codegenLive = isCodegenActiveForScene(scene.id);
               return (
                 <article
                   key={scene.id}
@@ -903,6 +980,12 @@ export default function App() {
                         >
                           {scene.designNotes ? '重新设计' : '生成设计方案'}
                         </MiniBtn>
+                        <MiniBtn
+                          disabled={anyRunning || !status?.captionExists}
+                          onClick={() => runSceneCodegen(scene.id)}
+                        >
+                          生成 Remotion 代码
+                        </MiniBtn>
                       </>
                     )}
                     {step === 'preview' && (
@@ -921,7 +1004,11 @@ export default function App() {
                         </MiniBtn>
                       </>
                     )}
-                    {ttsLive ? (
+                    {codegenLive ? (
+                      <span style={{fontSize: 12, color: '#bd93f9', marginLeft: 'auto'}}>
+                        Remotion 代码生成中：{codegen?.message}
+                      </span>
+                    ) : ttsLive ? (
                       <span style={{fontSize: 12, color: '#50fa7b', marginLeft: 'auto'}}>
                         语音生成中：{ttsStatus?.message}
                       </span>
@@ -1015,25 +1102,61 @@ export default function App() {
 
                 {/* DESIGN PANEL */}
                 {step === 'design' && (
-                  <Panel title="视觉设计方案" subtitle={selectedConfigScene?.designNotes ? '已有方案' : '未生成'}>
-                    {selectedConfigScene?.designNotes ? (
-                      <pre style={markdownPreviewStyle}>{selectedConfigScene.designNotes}</pre>
-                    ) : (
-                      <div style={emptyStyle}>点击「生成设计方案」让 LLM 分析画面布局。</div>
-                    )}
-                    <div style={{display: 'flex', gap: 8, marginTop: 12}}>
-                      <button
-                        type="button"
-                        style={buttonStyle('#bd93f9', anyRunning)}
-                        onClick={() =>
-                          setModal({kind: 'design', sceneId: selectedScene.id, loading: false})
-                        }
-                        disabled={anyRunning}
-                      >
-                        重新生成设计方案
-                      </button>
-                    </div>
-                  </Panel>
+                  <>
+                    <Panel title="视觉设计方案" subtitle={selectedConfigScene?.designNotes ? '已有方案' : '未生成'}>
+                      {selectedConfigScene?.designNotes ? (
+                        <pre style={markdownPreviewStyle}>{selectedConfigScene.designNotes}</pre>
+                      ) : (
+                        <div style={emptyStyle}>点击「生成设计方案」让 LLM 分析画面布局。</div>
+                      )}
+                      <div style={{display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap'}}>
+                        <button
+                          type="button"
+                          style={buttonStyle('#bd93f9', anyRunning)}
+                          onClick={() =>
+                            setModal({kind: 'design', sceneId: selectedScene.id, loading: false})
+                          }
+                          disabled={anyRunning}
+                        >
+                          重新生成设计方案
+                        </button>
+                        <button
+                          type="button"
+                          style={buttonStyle('#50fa7b', anyRunning || !selectedScene.captionExists)}
+                          onClick={() => runSceneCodegen(selectedScene.id)}
+                          disabled={anyRunning || !selectedScene.captionExists}
+                        >
+                          生成 Remotion 代码
+                        </button>
+                      </div>
+                    </Panel>
+
+                    <Panel
+                      title="Remotion 代码生成"
+                      subtitle={codegen?.running ? codegen.message : (codegen?.targetFile ?? '未生成')}
+                    >
+                      {!selectedScene.captionExists ? (
+                        <div style={emptyStyle}>先完成语音时间轴对齐，再生成 Remotion 场景代码。</div>
+                      ) : (
+                        <div style={{display: 'grid', gap: 10}}>
+                          <div style={{fontSize: 12, color: codegen?.error ? '#ff6b6b' : '#9fb3c8'}}>
+                            {codegen?.error
+                              ? codegen.error
+                              : codegen?.sceneId
+                                ? `${codegen.sceneId} · ${codegen.step}`
+                                : '等待生成'}
+                          </div>
+                          {codegen?.logs?.length ? (
+                            <div style={{...logBoxStyle, maxHeight: 180}}>
+                              {codegen.logs.slice(-24).map((line, i) => (
+                                <div key={i}>{line}</div>
+                              ))}
+                            </div>
+                          ) : null}
+                        </div>
+                      )}
+                    </Panel>
+                  </>
                 )}
 
                 {/* PREVIEW PANEL */}

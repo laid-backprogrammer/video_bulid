@@ -9,6 +9,7 @@ import {runPipeline, globalState, subscribe, snapshot} from './src/composer/runn
 import {readJsonFile} from './src/composer/json-utils.mjs';
 import {synthesizeLipVoice} from './src/composer/voice-synthesis.mjs';
 import {alignScenes, getAudioDurationFrames} from './src/composer/voice-alignment.mjs';
+import {runSceneAgent} from './src/composer/scene-agent.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -70,6 +71,32 @@ const ttsState = {
   error: null,
   logs: [],
 };
+
+const codegenState = {
+  running: false,
+  sceneId: null,
+  step: 'idle',
+  message: '未开始',
+  startTime: null,
+  endTime: null,
+  targetFile: null,
+  error: null,
+  result: null,
+  logs: [],
+};
+
+const appendCodegenLog = (message) => {
+  codegenState.logs = [
+    ...codegenState.logs.slice(-159),
+    `[${new Date().toLocaleTimeString()}] ${message}`,
+  ];
+};
+
+const codegenSnapshot = () => ({
+  ...codegenState,
+  logs: [...codegenState.logs],
+  result: codegenState.result ? {...codegenState.result} : null,
+});
 
 const appendTtsLog = (message) => {
   ttsState.logs = [
@@ -593,6 +620,74 @@ app.post('/api/scene/design/stream', async (req, res) => {
     sendSse(res, 'error', {error: e.message});
   } finally {
     res.end();
+  }
+});
+
+app.get('/api/scene/codegen/status', (req, res) => {
+  res.json(codegenSnapshot());
+});
+
+app.post('/api/scene/codegen', async (req, res) => {
+  const {sceneId, model = null, repairs = 1, check = true} = req.body || {};
+  console.log(`[api/scene/codegen] scene=${sceneId}`);
+  if (codegenState.running) {
+    return res.status(409).json({error: 'Scene code generation is already running', status: codegenSnapshot()});
+  }
+
+  try {
+    if (!sceneId || !/^scene\d+$/i.test(sceneId)) throw new Error('sceneId is required');
+    await findScene(sceneId);
+    const captions = await captionData(sceneId);
+    if (!captions?.durationInFrames || !Array.isArray(captions.cues) || captions.cues.length === 0) {
+      throw new Error(`${sceneId} has no usable alignment. Run ASR/time alignment before generating Remotion code.`);
+    }
+
+    const repairAttempts = Math.max(0, Math.min(3, Number.isInteger(Number(repairs)) ? Number(repairs) : 1));
+    Object.assign(codegenState, {
+      running: true,
+      sceneId,
+      step: 'starting',
+      message: `准备生成 ${sceneId} Remotion 代码`,
+      startTime: Date.now(),
+      endTime: null,
+      targetFile: null,
+      error: null,
+      result: null,
+      logs: [],
+    });
+    appendCodegenLog(codegenState.message);
+
+    runSceneAgent({
+      sceneId,
+      model,
+      repairs: repairAttempts,
+      check: check !== false,
+      onLog: (line) => {
+        codegenState.step = 'running';
+        codegenState.message = line.replace(/^\[scene-agent\]\s*/, '');
+        appendCodegenLog(line);
+      },
+    }).then(async (result) => {
+      codegenState.running = false;
+      codegenState.step = 'done';
+      codegenState.message = `${sceneId} Remotion 代码已生成`;
+      codegenState.endTime = Date.now();
+      codegenState.targetFile = result.targetFile ?? null;
+      codegenState.result = result;
+      appendCodegenLog(codegenState.message);
+      await buildManifest().catch((error) => appendCodegenLog(`Manifest rebuild failed: ${error.message || error}`));
+    }).catch((error) => {
+      codegenState.running = false;
+      codegenState.step = 'failed';
+      codegenState.message = `${sceneId} Remotion 代码生成失败`;
+      codegenState.endTime = Date.now();
+      codegenState.error = error.message || String(error);
+      appendCodegenLog(`${codegenState.message}: ${codegenState.error}`);
+    });
+
+    res.json({success: true, status: codegenSnapshot()});
+  } catch (e) {
+    res.status(400).json({error: e.message});
   }
 });
 

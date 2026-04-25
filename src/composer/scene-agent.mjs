@@ -2,6 +2,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {spawn} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
 import {readJsonFile} from './json-utils.mjs';
 import {writeSceneCodegenContext} from './scene-codegen-context.mjs';
 
@@ -104,9 +105,16 @@ function runCommand(command, args, options = {}) {
   });
 }
 
-async function buildContext(sceneId) {
-  console.log(`[scene-agent] Building context for ${sceneId}`);
-  const result = await writeSceneCodegenContext(sceneId);
+function logLine(onLog, line) {
+  console.log(line);
+  onLog?.(line);
+}
+
+async function buildContext(sceneId, {onLog} = {}) {
+  logLine(onLog, `[scene-agent] Building context for ${sceneId}`);
+  const result = await writeSceneCodegenContext(sceneId, {log: false});
+  logLine(onLog, `Wrote ${path.relative(ROOT, result.jsonOut)}`);
+  logLine(onLog, `Wrote ${path.relative(ROOT, result.mdOut)}`);
   return {
     markdown: result.markdown,
     json: result.context,
@@ -217,7 +225,7 @@ async function writeGeneratedFile(context, code) {
   return target;
 }
 
-async function runChecks() {
+async function runChecks({onLog} = {}) {
   const checks = [
     ['npx', ['tsc', '--noEmit']],
     ['npm', ['run', 'editor:build']],
@@ -225,7 +233,7 @@ async function runChecks() {
   const outputs = [];
 
   for (const [command, args] of checks) {
-    console.log(`[scene-agent] Running ${command} ${args.join(' ')}`);
+    logLine(onLog, `[scene-agent] Running ${command} ${args.join(' ')}`);
     const result = await runCommand(command, args, {
       stream: true,
       shell: process.platform === 'win32',
@@ -300,42 +308,86 @@ async function repairScene(contextMarkdown, code, validationError, {model}) {
   return extractCode(response);
 }
 
-async function main() {
-  const args = parseArgs(process.argv.slice(2));
-  const {markdown, json} = await buildContext(args.sceneId);
+export async function runSceneAgent(options = {}) {
+  const args = {
+    sceneId: options.sceneId,
+    model: options.model ?? process.env.SCENE_AGENT_MODEL ?? null,
+    repairs: options.repairs ?? DEFAULT_REPAIR_ATTEMPTS,
+    check: options.check ?? true,
+    dryRun: options.dryRun ?? false,
+    onLog: options.onLog,
+  };
+  if (!args.sceneId || !/^scene\d+$/i.test(args.sceneId)) {
+    throw new Error('sceneId must look like scene1, scene2, ...');
+  }
+  if (!Number.isInteger(args.repairs) || args.repairs < 0 || args.repairs > 3) {
+    throw new Error('repairs must be an integer from 0 to 3');
+  }
+
+  const {markdown, json} = await buildContext(args.sceneId, {onLog: args.onLog});
   const targetPath = ensureAllowedTarget(json.targetFile, json.allowedWriteFiles);
+  const previousCode = args.check ? await fs.readFile(targetPath, 'utf-8').catch(() => null) : null;
 
   if (args.dryRun) {
-    console.log(`[scene-agent] Dry run OK`);
-    console.log(`[scene-agent] Context: ${path.relative(ROOT, path.join(CONTEXT_DIR, `${args.sceneId}.codegen.md`))}`);
-    console.log(`[scene-agent] Target: ${path.relative(ROOT, targetPath)}`);
-    return;
+    logLine(args.onLog, `[scene-agent] Dry run OK`);
+    logLine(args.onLog, `[scene-agent] Context: ${path.relative(ROOT, path.join(CONTEXT_DIR, `${args.sceneId}.codegen.md`))}`);
+    logLine(args.onLog, `[scene-agent] Target: ${path.relative(ROOT, targetPath)}`);
+    return {
+      sceneId: args.sceneId,
+      targetFile: path.relative(ROOT, targetPath).replace(/\\/g, '/'),
+      dryRun: true,
+    };
   }
 
-  console.log(`[scene-agent] Generating ${path.relative(ROOT, targetPath)}`);
+  logLine(args.onLog, `[scene-agent] Generating ${path.relative(ROOT, targetPath)}`);
   let code = await generateScene(markdown, {model: args.model});
   await writeGeneratedFile(json, code);
+  logLine(args.onLog, `[scene-agent] Wrote ${path.relative(ROOT, targetPath)}`);
 
   if (!args.check) {
-    console.log(`[scene-agent] Wrote ${path.relative(ROOT, targetPath)} without validation (--no-check)`);
-    return;
+    logLine(args.onLog, `[scene-agent] Wrote ${path.relative(ROOT, targetPath)} without validation (--no-check)`);
+    return {
+      sceneId: args.sceneId,
+      targetFile: path.relative(ROOT, targetPath).replace(/\\/g, '/'),
+      checked: false,
+    };
   }
 
-  for (let attempt = 0; attempt <= args.repairs; attempt += 1) {
-    try {
-      await runChecks();
-      console.log(`[scene-agent] Done: ${path.relative(ROOT, targetPath)}`);
-      return;
-    } catch (error) {
-      if (attempt >= args.repairs) throw error;
-      console.log(`[scene-agent] Validation failed, asking LLM to repair (${attempt + 1}/${args.repairs})`);
-      code = await repairScene(markdown, code, error.message || String(error), {model: args.model});
-      await writeGeneratedFile(json, code);
+  try {
+    for (let attempt = 0; attempt <= args.repairs; attempt += 1) {
+      try {
+        await runChecks({onLog: args.onLog});
+        logLine(args.onLog, `[scene-agent] Done: ${path.relative(ROOT, targetPath)}`);
+        return {
+          sceneId: args.sceneId,
+          targetFile: path.relative(ROOT, targetPath).replace(/\\/g, '/'),
+          checked: true,
+        };
+      } catch (error) {
+        if (attempt >= args.repairs) throw error;
+        logLine(args.onLog, `[scene-agent] Validation failed, asking LLM to repair (${attempt + 1}/${args.repairs})`);
+        code = await repairScene(markdown, code, error.message || String(error), {model: args.model});
+        await writeGeneratedFile(json, code);
+        logLine(args.onLog, `[scene-agent] Wrote repaired ${path.relative(ROOT, targetPath)}`);
+      }
     }
+  } catch (error) {
+    if (previousCode !== null) {
+      await fs.writeFile(targetPath, previousCode, 'utf-8');
+      logLine(args.onLog, `[scene-agent] Restored previous ${path.relative(ROOT, targetPath)} after failed validation`);
+    }
+    throw error;
   }
 }
 
-main().catch((error) => {
-  console.error(error.message || error);
-  process.exit(1);
-});
+async function main() {
+  const args = parseArgs(process.argv.slice(2));
+  await runSceneAgent(args);
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    console.error(error.message || error);
+    process.exit(1);
+  });
+}
