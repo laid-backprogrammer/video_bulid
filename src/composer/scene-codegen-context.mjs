@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {readJsonFile} from './json-utils.mjs';
 
 const ROOT = process.cwd();
@@ -52,12 +53,7 @@ const selectedRuleFiles = [
   'skills/rules/measuring-text.md',
 ];
 
-async function main() {
-  const sceneId = process.argv[2];
-  if (!sceneId) {
-    throw new Error('Usage: node src/composer/scene-codegen-context.mjs scene1');
-  }
-
+export async function buildSceneCodegenContext(sceneId) {
   const number = sceneNumber(sceneId);
   const script = await readJsonFile(SCRIPT_PATH);
   const scene = script.scenes.find((item) => item.id === sceneId);
@@ -116,16 +112,37 @@ async function main() {
     ...await Promise.all(selectedRuleFiles.map(async (file) => fenced(`Rule: ${file}`, file.endsWith('.md') ? 'md' : 'tsx', await readText(file)))),
   ];
 
-  await fs.mkdir(OUT_DIR, {recursive: true});
-  const jsonOut = path.join(OUT_DIR, `${sceneId}.codegen.json`);
-  const mdOut = path.join(OUT_DIR, `${sceneId}.codegen.md`);
-  await fs.writeFile(jsonOut, JSON.stringify(context, null, 2), 'utf-8');
-  await fs.writeFile(mdOut, sections.join('\n'), 'utf-8');
-  console.log(`Wrote ${path.relative(ROOT, jsonOut)}`);
-  console.log(`Wrote ${path.relative(ROOT, mdOut)}`);
+  return {
+    context,
+    markdown: sections.join('\n'),
+    jsonOut: path.join(OUT_DIR, `${sceneId}.codegen.json`),
+    mdOut: path.join(OUT_DIR, `${sceneId}.codegen.md`),
+  };
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+export async function writeSceneCodegenContext(sceneId, {log = true} = {}) {
+  const result = await buildSceneCodegenContext(sceneId);
+  await fs.mkdir(OUT_DIR, {recursive: true});
+  await fs.writeFile(result.jsonOut, JSON.stringify(result.context, null, 2), 'utf-8');
+  await fs.writeFile(result.mdOut, result.markdown, 'utf-8');
+  if (log) {
+    console.log(`Wrote ${path.relative(ROOT, result.jsonOut)}`);
+    console.log(`Wrote ${path.relative(ROOT, result.mdOut)}`);
+  }
+  return result;
+}
+
+async function main() {
+  const sceneId = process.argv[2];
+  if (!sceneId) {
+    throw new Error('Usage: node src/composer/scene-codegen-context.mjs scene1');
+  }
+  await writeSceneCodegenContext(sceneId);
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}

@@ -11,6 +11,7 @@
     "editor:serve": "node server.mjs",
     "editor": "npm run editor:build && npm run editor:serve",
     "scene:context": "node src/composer/scene-codegen-context.mjs",
+    "scene:agent": "node src/composer/scene-agent.mjs",
     "scene:check": "npx tsc --noEmit && npm run editor:build"
   },
   "dependencies": {
