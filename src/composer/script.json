@@ -1,0 +1,51 @@
+{
+  "fps": 30,
+  "ttsBaseUrl": "https://openapi.lipvoice.cn",
+  "ttsSign": "8gKRGCHUVMnQcWxSvH2RKyUYvlDtzNGN",
+  "ttsAudioId": "A1fKB52cU3EoZFaUcUaWFGQ86B",
+  "ttsSpeed": 1,
+  "transcribeBaseUrl": "https://api.v3.cm/v1",
+  "transcribeModel": "whisper-1",
+  "transcribeApiKey": "sk-6DC7tx3jVeqQVzPG32Af4cF6B0Ca496d8f4685DaDf7e9bCd",
+  "llmBaseUrl": "https://api.v3.cm/v1",
+  "llmModel": "gpt-4o-mini",
+  "scenes": [
+    {
+      "id": "scene1",
+      "text": "最近很多人在聊 Agent。测试一下\n"
+    },
+    {
+      "id": "scene2",
+      "text": "有人把它吹得很夸张，也有人逮着一切 Agent 方案一顿骂。"
+    },
+    {
+      "id": "scene3",
+      "text": "但我自己做 AI 工具落地之后，越来越觉得一个更实际的问题是："
+    },
+    {
+      "id": "scene4",
+      "text": "越来越觉得一个更实际的问题是："
+    },
+    {
+      "id": "scene5",
+      "text": "很多人讨论 Agent 的时候，根本没把场景分清楚。"
+    },
+    {
+      "id": "scene6",
+      "text": "把不同场景混在一起，讨论就一定失真。"
+    },
+    {
+      "id": "scene7",
+      "text": "先问场景，再谈 Agent。"
+    },
+    {
+      "id": "scene8",
+      "text": "问题从来不只是 Agent 行不行。而是你到底在解决什么场景。"
+    }
+  ],
+  "ttsStyle": "2",
+  "ttsGenre": 1,
+  "ttsExt": {
+    "calm": 1
+  }
+}

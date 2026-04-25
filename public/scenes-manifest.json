@@ -1,0 +1,358 @@
+{
+  "fps": 30,
+  "scenes": [
+    {
+      "id": "scene1",
+      "text": "最近很多人在聊 Agent。测试一下\n",
+      "audioFile": "public/voiceover/scene1.1777137100446.wav",
+      "captionsFile": "public/captions/scene1.json",
+      "durationInFrames": 137,
+      "cues": [
+        {
+          "id": "cue-1",
+          "startFrame": 0,
+          "endFrame": 71,
+          "text": "最近很多人在聊 Agent",
+          "words": [
+            {
+              "text": "最",
+              "startFrame": 0,
+              "endFrame": 8
+            },
+            {
+              "text": "近",
+              "startFrame": 8,
+              "endFrame": 17
+            },
+            {
+              "text": "很",
+              "startFrame": 17,
+              "endFrame": 26
+            },
+            {
+              "text": "多",
+              "startFrame": 26,
+              "endFrame": 35
+            },
+            {
+              "text": "人",
+              "startFrame": 35,
+              "endFrame": 44
+            },
+            {
+              "text": "在",
+              "startFrame": 44,
+              "endFrame": 53
+            },
+            {
+              "text": "聊",
+              "startFrame": 53,
+              "endFrame": 62
+            },
+            {
+              "text": "Agent",
+              "startFrame": 62,
+              "endFrame": 71
+            }
+          ],
+          "emphasis": []
+        },
+        {
+          "id": "cue-2",
+          "startFrame": 71,
+          "endFrame": 107,
+          "text": "测试一下",
+          "words": [
+            {
+              "text": "测",
+              "startFrame": 71,
+              "endFrame": 80
+            },
+            {
+              "text": "试",
+              "startFrame": 80,
+              "endFrame": 89
+            },
+            {
+              "text": "一",
+              "startFrame": 89,
+              "endFrame": 98
+            },
+            {
+              "text": "下",
+              "startFrame": 98,
+              "endFrame": 107
+            }
+          ],
+          "emphasis": []
+        }
+      ]
+    },
+    {
+      "id": "scene2",
+      "text": "有人把它吹得很夸张，也有人逮着一切 Agent 方案一顿骂。",
+      "audioFile": "public/voiceover/scene2.mp3",
+      "captionsFile": "public/captions/scene2.json",
+      "durationInFrames": 150,
+      "cues": [
+        {
+          "id": "cue-1",
+          "text": "测试文案",
+          "startFrame": 0,
+          "endFrame": 60,
+          "words": [
+            {
+              "text": "测",
+              "startFrame": 0,
+              "endFrame": 15
+            },
+            {
+              "text": "试",
+              "startFrame": 15,
+              "endFrame": 30
+            },
+            {
+              "text": "文",
+              "startFrame": 30,
+              "endFrame": 45
+            },
+            {
+              "text": "案",
+              "startFrame": 45,
+              "endFrame": 60
+            }
+          ],
+          "emphasis": []
+        }
+      ]
+    },
+    {
+      "id": "scene3",
+      "text": "但我自己做 AI 工具落地之后，越来越觉得一个更实际的问题是：",
+      "audioFile": "public/voiceover/scene3.mp3",
+      "captionsFile": "public/captions/scene3.json",
+      "durationInFrames": 150,
+      "cues": [
+        {
+          "id": "cue-1",
+          "text": "测试文案",
+          "startFrame": 0,
+          "endFrame": 60,
+          "words": [
+            {
+              "text": "测",
+              "startFrame": 0,
+              "endFrame": 15
+            },
+            {
+              "text": "试",
+              "startFrame": 15,
+              "endFrame": 30
+            },
+            {
+              "text": "文",
+              "startFrame": 30,
+              "endFrame": 45
+            },
+            {
+              "text": "案",
+              "startFrame": 45,
+              "endFrame": 60
+            }
+          ],
+          "emphasis": []
+        }
+      ]
+    },
+    {
+      "id": "scene4",
+      "text": "越来越觉得一个更实际的问题是：",
+      "audioFile": "public/voiceover/scene4.mp3",
+      "captionsFile": "public/captions/scene4.json",
+      "durationInFrames": 150,
+      "cues": [
+        {
+          "id": "cue-1",
+          "text": "测试文案",
+          "startFrame": 0,
+          "endFrame": 60,
+          "words": [
+            {
+              "text": "测",
+              "startFrame": 0,
+              "endFrame": 15
+            },
+            {
+              "text": "试",
+              "startFrame": 15,
+              "endFrame": 30
+            },
+            {
+              "text": "文",
+              "startFrame": 30,
+              "endFrame": 45
+            },
+            {
+              "text": "案",
+              "startFrame": 45,
+              "endFrame": 60
+            }
+          ],
+          "emphasis": []
+        }
+      ]
+    },
+    {
+      "id": "scene5",
+      "text": "很多人讨论 Agent 的时候，根本没把场景分清楚。",
+      "audioFile": "public/voiceover/scene5.mp3",
+      "captionsFile": "public/captions/scene5.json",
+      "durationInFrames": 150,
+      "cues": [
+        {
+          "id": "cue-1",
+          "text": "测试文案",
+          "startFrame": 0,
+          "endFrame": 60,
+          "words": [
+            {
+              "text": "测",
+              "startFrame": 0,
+              "endFrame": 15
+            },
+            {
+              "text": "试",
+              "startFrame": 15,
+              "endFrame": 30
+            },
+            {
+              "text": "文",
+              "startFrame": 30,
+              "endFrame": 45
+            },
+            {
+              "text": "案",
+              "startFrame": 45,
+              "endFrame": 60
+            }
+          ],
+          "emphasis": []
+        }
+      ]
+    },
+    {
+      "id": "scene6",
+      "text": "把不同场景混在一起，讨论就一定失真。",
+      "audioFile": "public/voiceover/scene6.mp3",
+      "captionsFile": "public/captions/scene6.json",
+      "durationInFrames": 150,
+      "cues": [
+        {
+          "id": "cue-1",
+          "text": "测试文案",
+          "startFrame": 0,
+          "endFrame": 60,
+          "words": [
+            {
+              "text": "测",
+              "startFrame": 0,
+              "endFrame": 15
+            },
+            {
+              "text": "试",
+              "startFrame": 15,
+              "endFrame": 30
+            },
+            {
+              "text": "文",
+              "startFrame": 30,
+              "endFrame": 45
+            },
+            {
+              "text": "案",
+              "startFrame": 45,
+              "endFrame": 60
+            }
+          ],
+          "emphasis": []
+        }
+      ]
+    },
+    {
+      "id": "scene7",
+      "text": "先问场景，再谈 Agent。",
+      "audioFile": "public/voiceover/scene7.mp3",
+      "captionsFile": "public/captions/scene7.json",
+      "durationInFrames": 150,
+      "cues": [
+        {
+          "id": "cue-1",
+          "text": "测试文案",
+          "startFrame": 0,
+          "endFrame": 60,
+          "words": [
+            {
+              "text": "测",
+              "startFrame": 0,
+              "endFrame": 15
+            },
+            {
+              "text": "试",
+              "startFrame": 15,
+              "endFrame": 30
+            },
+            {
+              "text": "文",
+              "startFrame": 30,
+              "endFrame": 45
+            },
+            {
+              "text": "案",
+              "startFrame": 45,
+              "endFrame": 60
+            }
+          ],
+          "emphasis": []
+        }
+      ]
+    },
+    {
+      "id": "scene8",
+      "text": "问题从来不只是 Agent 行不行。而是你到底在解决什么场景。",
+      "audioFile": "public/voiceover/scene8.mp3",
+      "captionsFile": "public/captions/scene8.json",
+      "durationInFrames": 150,
+      "cues": [
+        {
+          "id": "cue-1",
+          "text": "测试文案",
+          "startFrame": 0,
+          "endFrame": 60,
+          "words": [
+            {
+              "text": "测",
+              "startFrame": 0,
+              "endFrame": 15
+            },
+            {
+              "text": "试",
+              "startFrame": 15,
+              "endFrame": 30
+            },
+            {
+              "text": "文",
+              "startFrame": 30,
+              "endFrame": 45
+            },
+            {
+              "text": "案",
+              "startFrame": 45,
+              "endFrame": 60
+            }
+          ],
+          "emphasis": []
+        }
+      ]
+    }
+  ]
+}

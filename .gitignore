@@ -1,0 +1,13 @@
+node_modules/
+editor/dist/
+output/
+
+*.log
+run.pid
+
+public/voiceover/*.download.wav
+public/voiceover/*.tmp.*
+public/voiceover/__ffmpeg_test.mp3
+
+.DS_Store
+Thumbs.db

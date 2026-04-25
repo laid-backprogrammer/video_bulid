@@ -1,0 +1,9 @@
+﻿{
+  "id": "scene5",
+  "text": "test",
+  "audioFile": "public/voiceover/scene5.mp3",
+  "durationInFrames": 120,
+  "cues": [
+    {"id":"cue-1","text":"测试文案","startFrame":0,"endFrame":60,"words":[{"text":"测","startFrame":0,"endFrame":15},{"text":"试","startFrame":15,"endFrame":30},{"text":"文","startFrame":30,"endFrame":45},{"text":"案","startFrame":45,"endFrame":60}],"emphasis":[]}
+  ]
+}

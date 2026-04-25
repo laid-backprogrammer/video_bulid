@@ -1,0 +1,90 @@
+{
+  "id": "scene1",
+  "text": "最近很多人在聊 Agent。测试一下\n",
+  "audioFile": "public/voiceover/scene1.1777137100446.wav",
+  "durationInFrames": 107,
+  "cues": [
+    {
+      "id": "cue-1",
+      "startFrame": 0,
+      "endFrame": 71,
+      "text": "最近很多人在聊 Agent",
+      "words": [
+        {
+          "text": "最",
+          "startFrame": 0,
+          "endFrame": 8
+        },
+        {
+          "text": "近",
+          "startFrame": 8,
+          "endFrame": 17
+        },
+        {
+          "text": "很",
+          "startFrame": 17,
+          "endFrame": 26
+        },
+        {
+          "text": "多",
+          "startFrame": 26,
+          "endFrame": 35
+        },
+        {
+          "text": "人",
+          "startFrame": 35,
+          "endFrame": 44
+        },
+        {
+          "text": "在",
+          "startFrame": 44,
+          "endFrame": 53
+        },
+        {
+          "text": "聊",
+          "startFrame": 53,
+          "endFrame": 62
+        },
+        {
+          "text": "Agent",
+          "startFrame": 62,
+          "endFrame": 71
+        }
+      ],
+      "emphasis": []
+    },
+    {
+      "id": "cue-2",
+      "startFrame": 71,
+      "endFrame": 107,
+      "text": "测试一下",
+      "words": [
+        {
+          "text": "测",
+          "startFrame": 71,
+          "endFrame": 80
+        },
+        {
+          "text": "试",
+          "startFrame": 80,
+          "endFrame": 89
+        },
+        {
+          "text": "一",
+          "startFrame": 89,
+          "endFrame": 98
+        },
+        {
+          "text": "下",
+          "startFrame": 98,
+          "endFrame": 107
+        }
+      ],
+      "emphasis": []
+    }
+  ],
+  "alignedAt": "2026-04-25T17:12:25.377Z",
+  "alignmentSource": "estimated",
+  "wordCount": 12,
+  "wordTimingSource": "estimated"
+}
