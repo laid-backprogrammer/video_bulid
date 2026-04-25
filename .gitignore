@@ -9,5 +9,7 @@ public/voiceover/*.download.wav
 public/voiceover/*.tmp.*
 public/voiceover/__ffmpeg_test.mp3
 
+.scene-codegen/
+
 .DS_Store
 Thumbs.db

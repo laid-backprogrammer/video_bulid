@@ -12,14 +12,16 @@ import {fade} from '@remotion/transitions/fade';
 import {slide} from '@remotion/transitions/slide';
 import {wipe} from '@remotion/transitions/wipe';
 
-import {Scene1} from './scenes/Scene1';
-import {Scene2} from './scenes/Scene2';
-import {Scene3} from './scenes/Scene3';
-import {Scene4} from './scenes/Scene4';
-import {Scene5} from './scenes/Scene5';
-import {Scene6} from './scenes/Scene6';
-import {Scene7} from './scenes/Scene7';
-import {Scene8} from './scenes/Scene8';
+import {
+  Scene1Generated,
+  Scene2Generated,
+  Scene3Generated,
+  Scene4Generated,
+  Scene5Generated,
+  Scene6Generated,
+  Scene7Generated,
+  Scene8Generated,
+} from './scenes/generated';
 import {CaptionOverlay} from './components/Captions';
 import type {AgentDiscussionProps, SceneData} from './types';
 
@@ -29,14 +31,14 @@ const SCENE_TAIL_PADDING = FPS;
 const MIN_SCENE_DURATION = TRANSITION_DURATION + 1;
 
 const SCENE_COMPONENTS: Record<string, React.FC<{cues: SceneData['cues']; durationInFrames: number}>> = {
-  scene1: Scene1,
-  scene2: Scene2,
-  scene3: Scene3,
-  scene4: Scene4,
-  scene5: Scene5,
-  scene6: Scene6,
-  scene7: Scene7,
-  scene8: Scene8,
+  scene1: Scene1Generated,
+  scene2: Scene2Generated,
+  scene3: Scene3Generated,
+  scene4: Scene4Generated,
+  scene5: Scene5Generated,
+  scene6: Scene6Generated,
+  scene7: Scene7Generated,
+  scene8: Scene8Generated,
 };
 
 const TRANSITIONS = [
