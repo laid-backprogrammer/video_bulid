@@ -100,6 +100,8 @@ export async function buildSceneCodegenContext(sceneId) {
     '',
     'Be visually creative. The constraints are about where you may write and how timing data must be used, not about making the visual content conservative.',
     'Use the narration, design notes, and word-level timestamps as anchors for an original Remotion scene.',
+    'Scene length and cue count vary. Do not assume the scene is short, do not assume there are only one or two cues, and do not build a first-sentence-only intro. The main visual timeline must respond to every cue in Task JSON.',
+    'Do not hard-code narration text, fixed cue title arrays, or fixed sentence arrays. Derive displayed narration and beat state from cues/cue.text/cue.words at runtime. Generic colors, shapes, and layout constants are fine.',
     '',
     'Important import path rule: the target file is inside src/scenes/generated. Imports from src/types, src/hooks, and src/components must go up two levels, for example ../../types, ../../hooks/useSceneProgress, and ../../components/Background. If you copy imports from src/scenes/SceneX.tsx, add one extra ../.',
     'Important TypeScript style rule: if a style object is stored in a variable, annotate it as React.CSSProperties so CSS literal fields such as textAlign and position keep valid narrow types.',

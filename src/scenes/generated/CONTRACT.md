@@ -17,6 +17,9 @@ Rules:
 
 - Do not edit `Root.tsx`, server files, editor files, package files, or other scene files.
 - Use `durationInFrames` and `cues[].words[]` to drive timing.
+- Scene length and cue count are variable. Do not assume a fixed duration, fixed sentence count, or fixed visual beat count.
+- For multi-cue scenes, the main visual composition must process the full `cues` array with runtime logic such as `cues.map`, `cues.find`, `cues.findIndex`, or `cues.reduce`; using `CaptionOverlay` alone is not enough.
+- Do not hard-code narration text, cue titles, sentence arrays, or first-cue-only headline text. Display narration-derived text from `cues`, `cue.text`, or `cue.words` at runtime.
 - Keep imports limited to React, `remotion`, local hooks/components, and existing dependencies.
 - This file lives in `src/scenes/generated`, so local imports must use generated-file relative paths:
   - `../../types`
@@ -36,4 +39,5 @@ Creative freedom:
 - Treat `designNotes` as a creative brief, not a literal template. You may expand it if the result still supports the narration.
 - Do not make a generic background. Every visual beat should support the current narration and timestamped words.
 - Align important reveals, highlights, cuts, and motion accents to `cues[].words[]` timing.
+- Adapt layout density, text size, number of visual elements, and transitions to `cues.length` and `durationInFrames`.
 - Prefer rich motion and clear visual storytelling over static cards or explanatory text.

@@ -213,10 +213,12 @@ function relativeImportExists(specifier, sceneId) {
   return candidates.some((candidate) => existsSync(candidate));
 }
 
-function validateGeneratedCode(code, sceneId) {
+function validateGeneratedCode(code, context) {
+  const sceneId = context.sceneId;
   const number = sceneNumber(sceneId);
   const exportName = `Scene${number}Generated`;
   const problems = [];
+  const cueCount = context.alignment?.cues?.length ?? 0;
 
   if (!code.includes(`export const ${exportName}`)) {
     problems.push(`Missing required export: ${exportName}`);
@@ -226,6 +228,18 @@ function validateGeneratedCode(code, sceneId) {
   }
   if (/from\s+['"]\.\.\/(?:types|hooks\/|components\/)/.test(code)) {
     problems.push('Generated file is in src/scenes/generated; imports to types/hooks/components must use ../../, not ../');
+  }
+  if (cueCount > 1) {
+    const fullCueUse = /\b(?:cues|safeCues|timelineCues|sceneCues|visibleCues)\s*\.\s*(?:map|find|findIndex|filter|reduce|some)\s*\(/.test(code);
+    if (!fullCueUse) {
+      problems.push('Multi-cue scenes must process the full cues array for the main visuals; do not rely only on a first headline or CaptionOverlay');
+    }
+    if (/\bcues\s*\[\s*0\s*\]|\bcues\s*\.at\s*\(\s*0\s*\)/.test(code)) {
+      problems.push('Do not build the scene around only cues[0]; support every cue dynamically');
+    }
+    if (/\b(?:const|let)\s+\w*(?:TITLE|TITLES|HEADLINE|HEADLINES|SENTENCE|SENTENCES|CAPTION|CAPTIONS|BEAT|BEATS)\w*\s*=\s*\[/i.test(code)) {
+      problems.push('Do not hard-code cue title/headline/sentence arrays; derive narration-driven labels from cues at runtime');
+    }
   }
   const importMatches = [...code.matchAll(/from\s+['"]([^'"]+)['"]/g)];
   for (const match of importMatches) {
@@ -253,7 +267,7 @@ function validateGeneratedCode(code, sceneId) {
 }
 
 async function writeGeneratedFile(context, code) {
-  validateGeneratedCode(code, context.sceneId);
+  validateGeneratedCode(code, context);
   const target = ensureAllowedTarget(context.targetFile, context.allowedWriteFiles);
   await fs.writeFile(target, code.trimEnd() + '\n', 'utf-8');
   return target;
@@ -292,6 +306,10 @@ function makeSystemPrompt() {
     'Return exactly one complete TSX file. Do not use Markdown fences or explanations.',
     'You may be visually creative: invent metaphors, layouts, typography, motion, symbolic UI, charts, particles, and transitions.',
     'The hard constraints are file scope, export shape, existing dependencies, and timing alignment.',
+    'Scene length and cue count are variable. Never assume a fixed number of cues or fixed duration.',
+    'For multi-cue scenes, the main visual composition must process the full cues array at runtime using cues.map/find/findIndex/filter/reduce/some or equivalent logic.',
+    'Do not hard-code narration text, cue title arrays, sentence arrays, or first-cue-only headline text. Use cues, cue.text, and cue.words as runtime data.',
+    'CaptionOverlay may be used, but it cannot be the only part of the scene that follows the cues.',
     'The output file is in src/scenes/generated. Use ../../types, ../../hooks/useSceneProgress, ../../components/Background, and ../../components/Captions for local imports outside src/scenes.',
     'If you copy imports from src/scenes/SceneX.tsx, add one extra ../ because generated files are one directory deeper.',
     'When hoisting style objects into variables, annotate them as React.CSSProperties to avoid CSS literal types widening to string.',
@@ -305,6 +323,8 @@ function makeInitialUserPrompt(contextMarkdown) {
   return [
     'Generate the target Remotion scene from this context.',
     'Only output the full contents of the target SceneX.generated.tsx file.',
+    'The generated visual must cover all cues in the Task JSON, not just the first sentence.',
+    'Derive any narration text from props.cues at runtime instead of embedding copied scene text into string literals.',
     '',
     contextMarkdown,
   ].join('\n');
