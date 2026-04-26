@@ -52,6 +52,8 @@ type Config = {
   ttsSpeed: number;
   ttsStyle?: string;
   ttsGenre?: number;
+  ttsVoiceName?: string;
+  ttsVoiceDescribe?: string;
   transcribeBaseUrl: string;
   transcribeModel: string;
   transcribeApiKey: string;
@@ -284,6 +286,10 @@ export default function App() {
   const [cacheKey, setCacheKey] = useState(Date.now());
   const [modal, setModal] = useState<ModalType>(null);
   const [previewVideoUrl, setPreviewVideoUrl] = useState<string | null>(null);
+  const [cloneFile, setCloneFile] = useState<File | null>(null);
+  const [cloneName, setCloneName] = useState('');
+  const [cloneDescribe, setCloneDescribe] = useState('');
+  const [cloneLoading, setCloneLoading] = useState(false);
   const logsRef = useRef<HTMLDivElement>(null);
   const renderPollErrorRef = useRef<string | null>(null);
   const ttsPollErrorRef = useRef<string | null>(null);
@@ -573,6 +579,32 @@ export default function App() {
       setStep('audio');
     });
 
+  const uploadVoiceClone = async () => {
+    if (!cloneFile || !cloneName.trim()) return;
+    setCloneLoading(true);
+    pushLog(`开始创建克隆声音：${cloneName.trim()}`);
+    try {
+      const form = new FormData();
+      form.append('file', cloneFile);
+      form.append('name', cloneName.trim());
+      form.append('describe', cloneDescribe.trim());
+      const res = await fetch('/api/tts/clone', {method: 'POST', body: form});
+      const text = await res.text();
+      const data = text ? JSON.parse(text) : {};
+      if (!res.ok) throw new Error(data?.error || text || res.statusText);
+      setConfig(data.config);
+      setCloneFile(null);
+      setCloneName('');
+      setCloneDescribe('');
+      await refresh();
+      pushLog(`克隆声音已启用：${data.data?.name ?? '未命名'} · audioId=${data.data?.audioId ?? ''}`);
+    } catch (error) {
+      pushLog(`克隆声音创建失败：${getErrorMessage(error)}`);
+    } finally {
+      setCloneLoading(false);
+    }
+  };
+
   const runAsr = (sceneId: string, force = false) =>
     runAction(`${force ? '重做' : '生成'}时间轴对齐 ${sceneId}`, async () => {
       const result = await postJson<{result?: {cues?: Array<{words?: unknown[]}>}}>('/api/asr', {sceneId, force});
@@ -743,7 +775,7 @@ export default function App() {
   };
 
   /* ---------- status ---------- */
-  const anyRunning = Boolean(busy || pipeline?.running || render?.running || ttsStatus?.running || codegen?.running || modal?.loading);
+  const anyRunning = Boolean(busy || pipeline?.running || render?.running || ttsStatus?.running || codegen?.running || modal?.loading || cloneLoading);
   const ttsPercent = ttsStatus?.total
     ? Math.round((ttsStatus.done / ttsStatus.total) * 100)
     : ttsStatus?.running
@@ -1095,6 +1127,41 @@ export default function App() {
                 {/* AUDIO PANEL */}
                 {step === 'audio' && (
                   <>
+                    <Panel title="声音克隆" subtitle={config.ttsVoiceName ? `${config.ttsVoiceName} · ${config.ttsAudioId}` : `当前 audioId=${config.ttsAudioId || '未设置'}`}>
+                      <div style={voiceCloneGridStyle}>
+                        <input
+                          type="file"
+                          accept=".mp3,.wav,.m4a,audio/mpeg,audio/wav,audio/x-m4a,audio/mp4"
+                          onChange={(e) => setCloneFile(e.target.files?.[0] ?? null)}
+                          disabled={cloneLoading || anyRunning}
+                          style={fileInputStyle}
+                        />
+                        <input
+                          value={cloneName}
+                          onChange={(e) => setCloneName(e.target.value)}
+                          placeholder="模型名称"
+                          disabled={cloneLoading || anyRunning}
+                          style={smallInputStyle}
+                        />
+                        <input
+                          value={cloneDescribe}
+                          onChange={(e) => setCloneDescribe(e.target.value)}
+                          placeholder="模型描述"
+                          disabled={cloneLoading || anyRunning}
+                          style={smallInputStyle}
+                        />
+                        <button
+                          type="button"
+                          style={buttonStyle('#50fa7b', cloneLoading || anyRunning || !cloneFile || !cloneName.trim())}
+                          onClick={uploadVoiceClone}
+                          disabled={cloneLoading || anyRunning || !cloneFile || !cloneName.trim()}
+                        >
+                          {cloneLoading ? '创建中…' : '创建并使用'}
+                        </button>
+                      </div>
+                      <p style={hintStyle}>支持 mp3、wav、m4a；小于 50MB；建议 2-60 秒参考音频。</p>
+                    </Panel>
+
                     <Panel title="语音生成状态" subtitle={ttsStatus?.running ? ttsStatusText : (ttsStatus?.message ?? '未开始')}>
                       <div style={progressWrapStyle}>
                         <div style={{...progressBarStyle, width: `${ttsProgressWidth}%`}} />
@@ -1562,6 +1629,9 @@ const sceneHeaderStyle: React.CSSProperties = {display: 'flex', justifyContent: 
 const providerSelectStyle: React.CSSProperties = {borderRadius: 10, border: '1px solid rgba(139,233,253,0.25)', background: '#070b16', color: '#e6edf3', padding: '9px 10px', fontSize: 13, fontWeight: 700};
 const modelInputStyle: React.CSSProperties = {width: 150, borderRadius: 10, border: '1px solid rgba(139,233,253,0.25)', background: '#070b16', color: '#e6edf3', padding: '9px 10px', fontSize: 13, fontWeight: 700};
 const cliCommandInputStyle: React.CSSProperties = {width: 360, maxWidth: '42vw', borderRadius: 10, border: '1px solid rgba(189,147,249,0.3)', background: '#070b16', color: '#e6edf3', padding: '9px 10px', fontSize: 13, fontFamily: 'Consolas, monospace'};
+const voiceCloneGridStyle: React.CSSProperties = {display: 'grid', gridTemplateColumns: '1.1fr 0.7fr 0.9fr auto', gap: 8, alignItems: 'center'};
+const smallInputStyle: React.CSSProperties = {minWidth: 0, borderRadius: 10, border: '1px solid rgba(255,255,255,0.1)', background: '#070b16', color: '#e6edf3', padding: '9px 10px', fontSize: 13};
+const fileInputStyle: React.CSSProperties = {minWidth: 0, borderRadius: 10, border: '1px solid rgba(255,255,255,0.1)', background: '#070b16', color: '#e6edf3', padding: '7px 10px', fontSize: 13};
 const textareaStyle: React.CSSProperties = {width: '100%', boxSizing: 'border-box', resize: 'vertical', borderRadius: 10, border: '1px solid rgba(255,255,255,0.1)', background: '#070b16', color: '#e6edf3', padding: 10, lineHeight: 1.5, fontSize: 14};
 const actionRowStyle: React.CSSProperties = {display: 'flex', gap: 8, flexWrap: 'wrap', padding: '0 14px 12px'};
 const panelCardStyle: React.CSSProperties = {background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 12, padding: 14, marginBottom: 12};

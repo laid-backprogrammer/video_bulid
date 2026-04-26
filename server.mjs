@@ -262,6 +262,124 @@ app.post('/api/config', async (req, res) => {
   }
 });
 
+const parseContentDisposition = (value = '') => {
+  const result = {};
+  for (const part of value.split(';')) {
+    const [rawKey, ...rawValue] = part.trim().split('=');
+    if (!rawKey || rawValue.length === 0) continue;
+    result[rawKey.toLowerCase()] = rawValue.join('=').trim().replace(/^"|"$/g, '');
+  }
+  return result;
+};
+
+const parseMultipartBody = (buffer, contentType) => {
+  const boundaryMatch = String(contentType || '').match(/boundary=(?:"([^"]+)"|([^;]+))/i);
+  if (!boundaryMatch) throw new Error('Missing multipart boundary');
+  const boundary = Buffer.from(`--${boundaryMatch[1] || boundaryMatch[2]}`);
+  const fields = {};
+  const files = {};
+  let cursor = buffer.indexOf(boundary);
+
+  while (cursor !== -1) {
+    cursor += boundary.length;
+    if (buffer.slice(cursor, cursor + 2).toString('latin1') === '--') break;
+    if (buffer.slice(cursor, cursor + 2).toString('latin1') === '\r\n') cursor += 2;
+
+    const headerEnd = buffer.indexOf(Buffer.from('\r\n\r\n'), cursor);
+    if (headerEnd === -1) break;
+    const headerText = buffer.slice(cursor, headerEnd).toString('utf8');
+    const headers = {};
+    for (const line of headerText.split('\r\n')) {
+      const index = line.indexOf(':');
+      if (index > 0) headers[line.slice(0, index).trim().toLowerCase()] = line.slice(index + 1).trim();
+    }
+
+    const nextBoundary = buffer.indexOf(boundary, headerEnd + 4);
+    if (nextBoundary === -1) break;
+    let content = buffer.slice(headerEnd + 4, nextBoundary);
+    if (content.slice(-2).toString('latin1') === '\r\n') content = content.slice(0, -2);
+
+    const disposition = parseContentDisposition(headers['content-disposition']);
+    if (disposition.name) {
+      if (disposition.filename) {
+        files[disposition.name] = {
+          filename: path.basename(disposition.filename),
+          contentType: headers['content-type'] || 'application/octet-stream',
+          buffer: content,
+        };
+      } else {
+        fields[disposition.name] = content.toString('utf8');
+      }
+    }
+
+    cursor = nextBoundary;
+  }
+
+  return {fields, files};
+};
+
+const uploadLipVoiceReference = async ({baseUrl, sign, file, name, describe}) => {
+  const form = new FormData();
+  form.append('file', new Blob([file.buffer], {type: file.contentType}), file.filename);
+  form.append('name', name);
+  if (describe) form.append('describe', describe);
+
+  const response = await fetch(`${baseUrl.replace(/\/$/, '')}/api/third/reference/upload`, {
+    method: 'POST',
+    headers: {sign},
+    body: form,
+    signal: AbortSignal.timeout(60000),
+  });
+  const text = await response.text();
+  if (!response.ok) throw new Error(`模型创建失败：HTTP ${response.status} ${text}`);
+
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    throw new Error(`模型创建失败：响应不是 JSON：${text.slice(0, 300)}`);
+  }
+  if (payload.code !== 0) throw new Error(`模型创建失败：${payload.msg ?? `code=${payload.code}`}`);
+  if (!payload.data?.audioId) throw new Error('模型创建失败：响应缺少 audioId');
+  return payload.data;
+};
+
+app.post('/api/tts/clone', express.raw({type: 'multipart/form-data', limit: '55mb'}), async (req, res) => {
+  try {
+    const script = await readScript();
+    const {fields, files} = parseMultipartBody(req.body, req.headers['content-type']);
+    const file = files.file;
+    const name = String(fields.name || '').trim();
+    const describe = String(fields.describe || '').trim();
+
+    if (!script.ttsBaseUrl) throw new Error('缺少 ttsBaseUrl');
+    if (!script.ttsSign) throw new Error('缺少 ttsSign');
+    if (!file) throw new Error('请提供参考音频文件');
+    if (!name) throw new Error('请提供模型名称');
+    if (!/\.(mp3|wav|m4a)$/i.test(file.filename)) throw new Error('参考音频只支持 mp3、wav、m4a');
+    if (file.buffer.length > 50 * 1024 * 1024) throw new Error('参考音频不能超过 50MB');
+
+    const data = await uploadLipVoiceReference({
+      baseUrl: script.ttsBaseUrl,
+      sign: script.ttsSign,
+      file,
+      name,
+      describe,
+    });
+
+    const nextScript = {
+      ...script,
+      ttsAudioId: data.audioId,
+      ttsVoiceName: data.name,
+      ttsVoiceDescribe: data.describe,
+    };
+    await fs.writeFile(SCRIPT_PATH, JSON.stringify(nextScript, null, 2), 'utf-8');
+    res.json({success: true, data, config: nextScript});
+  } catch (e) {
+    res.status(400).json({error: e.message});
+  }
+});
+
 app.get('/api/scenes', async (req, res) => {
   try {
     res.json(await getScenesStatus());
