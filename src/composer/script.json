@@ -9,8 +9,8 @@
   "transcribeApiKey": "sk-6DC7tx3jVeqQVzPG32Af4cF6B0Ca496d8f4685DaDf7e9bCd",
   "llmBaseUrl": "https://api.v3.cm/v1",
   "llmModel": "gpt-5.5",
-  "codegenProvider": "openai",
-  "codegenCliCommand": "kimi --prompt-file {promptFile} --output {outputFile}",
+  "codegenProvider": "external-cli",
+  "codegenCliCommand": "kimi --print --final-message-only --prompt {prompt}",
   "scenes": [
     {
       "id": "scene1",

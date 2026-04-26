@@ -827,7 +827,7 @@ export default function App() {
                   aria-label="Codegen CLI command"
                   value={config.codegenCliCommand ?? ''}
                   onChange={(e) => updateConfigField('codegenCliCommand', e.target.value)}
-                  placeholder="kimi --prompt-file {promptFile} --output {outputFile}"
+                  placeholder="kimi --print --final-message-only --prompt {prompt}"
                   style={cliCommandInputStyle}
                   disabled={anyRunning}
                 />

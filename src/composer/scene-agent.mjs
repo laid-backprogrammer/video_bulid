@@ -560,21 +560,50 @@ function fillCommandTemplate(command, replacements) {
   });
 }
 
+function makeExternalCliPrompt(basePrompt, {context, promptPath, outputPath, targetPath}) {
+  const rawTargetPath = path.relative(ROOT, targetPath).replace(/\\/g, '/');
+  const rawOutputPath = path.relative(ROOT, outputPath).replace(/\\/g, '/');
+  return [
+    'You are an external Remotion code generation CLI worker.',
+    `Write exactly one candidate TSX file: ${rawOutputPath}`,
+    `Do not edit ${rawTargetPath} directly. Do not edit any other file.`,
+    'The host process will validate the candidate and copy it to the target file if it passes.',
+    'If your CLI cannot write files, print exactly one complete TSX file to stdout.',
+    'Follow all constraints in the task below, especially the visual design brief, fine-tuning notes, skills, timestamped subtitle timeline, import rules, and runtime cue usage.',
+    '',
+    `Scene id: ${context.sceneId}`,
+    `Prompt file: ${path.relative(ROOT, promptPath).replace(/\\/g, '/')}`,
+    `Candidate output file: ${rawOutputPath}`,
+    `Final target file, host-managed: ${rawTargetPath}`,
+    '',
+    basePrompt,
+  ].join('\n');
+}
+
 async function runExternalSceneCli({command, prompt, context, attempt, targetPath, promptPath, outputPath, onLog}) {
   if (!command?.trim()) {
     throw new Error('Missing external codegen CLI command. Set script.codegenCliCommand or SCENE_AGENT_CLI_COMMAND.');
   }
 
   await fs.mkdir(CONTEXT_DIR, {recursive: true});
-  await fs.writeFile(promptPath, prompt.trimEnd() + '\n', 'utf-8');
+  const externalPrompt = makeExternalCliPrompt(prompt, {context, promptPath, outputPath, targetPath});
+  await fs.writeFile(promptPath, externalPrompt.trimEnd() + '\n', 'utf-8');
   await fs.rm(outputPath, {force: true}).catch(() => {});
 
   const rawTargetPath = path.relative(ROOT, targetPath).replace(/\\/g, '/');
   const rawPromptPath = path.relative(ROOT, promptPath).replace(/\\/g, '/');
   const rawOutputPath = path.relative(ROOT, outputPath).replace(/\\/g, '/');
+  const cliPrompt = [
+    `Read ${rawPromptPath}.`,
+    `Write the complete TSX candidate to ${rawOutputPath}.`,
+    `Do not edit ${rawTargetPath} or any other file.`,
+    'Return only a short completion note after writing the file.',
+  ].join(' ');
   const commandText = fillCommandTemplate(command, {
     sceneId: context.sceneId,
     attempt: String(attempt),
+    prompt: quoteArg(cliPrompt),
+    promptRaw: cliPrompt,
     promptFile: quoteArg(promptPath),
     promptFileRaw: rawPromptPath,
     contextFile: quoteArg(path.join(CONTEXT_DIR, `${context.sceneId}.codegen.md`)),
