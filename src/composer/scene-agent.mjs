@@ -213,6 +213,28 @@ function relativeImportExists(specifier, sceneId) {
   return candidates.some((candidate) => existsSync(candidate));
 }
 
+function narrationSnippets(context) {
+  const snippets = new Set();
+  const addPieces = (text) => {
+    const normalized = String(text ?? '').replace(/\s+/g, ' ').trim();
+    if (!normalized) return;
+    for (const part of normalized.split(/[，。！？、,.!?:；;\-—|/\\]+/)) {
+      const clean = part.trim();
+      if (clean.length >= 6) snippets.add(clean);
+      if (clean.length >= 10) {
+        snippets.add(clean.slice(0, 8));
+        snippets.add(clean.slice(-8));
+      }
+    }
+  };
+
+  addPieces(context.scene?.text);
+  for (const cue of context.alignment?.cues ?? []) {
+    addPieces(cue.text);
+  }
+  return [...snippets].filter((snippet) => snippet.length >= 6);
+}
+
 function validateGeneratedCode(code, context) {
   const sceneId = context.sceneId;
   const number = sceneNumber(sceneId);
@@ -239,6 +261,10 @@ function validateGeneratedCode(code, context) {
     }
     if (/\b(?:const|let)\s+\w*(?:TITLE|TITLES|HEADLINE|HEADLINES|SENTENCE|SENTENCES|CAPTION|CAPTIONS|BEAT|BEATS)\w*\s*=\s*\[/i.test(code)) {
       problems.push('Do not hard-code cue title/headline/sentence arrays; derive narration-driven labels from cues at runtime');
+    }
+    const hardcodedNarration = narrationSnippets(context).filter((snippet) => code.includes(snippet)).slice(0, 3);
+    if (hardcodedNarration.length > 0) {
+      problems.push(`Do not embed narration text directly in TSX; derive it from cues at runtime. Hard-coded snippets: ${hardcodedNarration.join(', ')}`);
     }
   }
   const importMatches = [...code.matchAll(/from\s+['"]([^'"]+)['"]/g)];
