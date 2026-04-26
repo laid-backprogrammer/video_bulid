@@ -88,7 +88,7 @@ const codegenState = {
 
 const appendCodegenLog = (message) => {
   codegenState.logs = [
-    ...codegenState.logs.slice(-159),
+    ...codegenState.logs.slice(-399),
     `[${new Date().toLocaleTimeString()}] ${message}`,
   ];
 };
@@ -244,6 +244,47 @@ async function getScenesStatus() {
   }));
   return {fps: script.fps, scenes};
 }
+
+const secondsFromFrames = (frames, fps) => Number((Number(frames || 0) / Number(fps || 30)).toFixed(3));
+
+const sceneTimingPrompt = async (sceneId) => {
+  const script = await readScript();
+  const fps = script.fps ?? 30;
+  const captions = await captionData(sceneId).catch(() => null);
+  if (!captions?.durationInFrames) {
+    return {
+      durationSeconds: null,
+      summary: 'No aligned caption timing is available yet.',
+    };
+  }
+
+  const cues = Array.isArray(captions.cues) ? captions.cues : [];
+  const durationSeconds = secondsFromFrames(captions.durationInFrames, fps);
+  const cueLines = cues.map((cue, index) => {
+    const start = secondsFromFrames(cue.startFrame, fps);
+    const end = secondsFromFrames(cue.endFrame, fps);
+    const words = (cue.words ?? []).map((word) => (
+      `${word.text}@${secondsFromFrames(word.startFrame, fps)}-${secondsFromFrames(word.endFrame, fps)}s`
+    )).join(' ');
+    return [
+      `cue ${index + 1}: ${start}-${end}s (${cue.startFrame}-${cue.endFrame}f)`,
+      `text: ${cue.text}`,
+      `chunks: ${words || '(none)'}`,
+    ].join('\n');
+  }).join('\n\n');
+
+  return {
+    durationSeconds,
+    summary: [
+      `fps: ${fps}`,
+      `duration: ${durationSeconds}s (${captions.durationInFrames} frames)`,
+      `alignmentSource: ${captions.alignmentSource ?? 'unknown'}`,
+      `wordTimingSource: ${captions.wordTimingSource ?? 'unknown'}`,
+      '',
+      cueLines,
+    ].join('\n'),
+  };
+};
 
 app.get('/api/config', async (req, res) => {
   try {
@@ -681,6 +722,8 @@ app.post('/api/scene/design', async (req, res) => {
   console.log(`[api/scene/design] scene=${sceneId}`);
   try {
     if (!sceneId || !text?.trim()) throw new Error('sceneId and text are required');
+    const timing = await sceneTimingPrompt(sceneId);
+    const preciseDuration = timing.durationSeconds ?? (durationMs ? Number((durationMs / 1000).toFixed(3)) : null);
 
     const fallback = [
       `## ${sceneId} 视觉设计方案`,
@@ -688,9 +731,9 @@ app.post('/api/scene/design', async (req, res) => {
       '- **画面基调**：科技感深色背景，辅以粒子动效',
       '- **主体元素**：核心关键词居中放大，配合辅助图标',
       '- **色彩方案**：主色 #00e5ff，辅色 #ff79c6，背景 #0b1020',
-      '- **动画节奏**：前 20% 入场，中间 60% 展开，后 20% 收尾',
+      '- **动画节奏**：按实际 cue 和词块时间轴切分，不按整数秒粗切',
       '- **字幕位置**：底部居中，避免遮挡主体',
-      `- **时长适配**：约 ${durationMs ? (durationMs / 1000).toFixed(1) + 's' : '未知'}`,
+      `- **时长适配**：${preciseDuration ? `${preciseDuration}s` : '未知'}，以实际音频/字幕时间轴为准`,
     ].join('\n');
 
     const apiKey = await getLlmApiKey();
@@ -699,8 +742,8 @@ app.post('/api/scene/design', async (req, res) => {
     }
 
     const design = await llmChat(
-      '你是 Remotion 视频视觉设计师。根据一段短视频文案和预计时长，给出具体的单场景视觉设计方案。方案必须包含：画面基调、主体元素、色彩方案、动画节奏（按百分比拆分）、字幕位置、时长适配建议。请用 Markdown 输出，语言简洁专业。',
-      `sceneId: ${sceneId}\n文案: ${text}\n预计时长: ${durationMs ? (durationMs / 1000).toFixed(1) + '秒' : '未知'}`,
+      '你是 Remotion 视频视觉设计师。根据一段短视频文案、精确音频时长和 cue/词块时间轴，给出具体的单场景视觉设计方案。不要把时长四舍五入到整数秒；必须使用 x.x 或 x.xxx 秒和帧数来描述节奏。方案必须包含：画面基调、主体元素、色彩方案、动画节奏（百分比 + 精确秒/帧）、字幕位置、时长适配建议。请用 Markdown 输出，语言简洁专业。',
+      `sceneId: ${sceneId}\n文案: ${text}\n精确时长: ${preciseDuration ? `${preciseDuration}秒` : '未知'}\n\n对齐后的字幕/词块时间轴:\n${timing.summary}`,
     );
     res.json({success: true, design: design || fallback, provider: 'openai'});
   } catch (e) {
@@ -718,6 +761,8 @@ app.post('/api/scene/design/stream', async (req, res) => {
 
   try {
     if (!sceneId || !text?.trim()) throw new Error('sceneId and text are required');
+    const timing = await sceneTimingPrompt(sceneId);
+    const preciseDuration = timing.durationSeconds ?? (durationMs ? Number((durationMs / 1000).toFixed(3)) : null);
 
     const fallback = [
       `## ${sceneId} 视觉设计方案`,
@@ -725,15 +770,15 @@ app.post('/api/scene/design/stream', async (req, res) => {
       '- **画面基调**：科技感深色背景，辅以粒子动效',
       '- **主体元素**：核心关键词居中放大，配合辅助图标',
       '- **色彩方案**：主色 #00e5ff，辅色 #ff79c6，背景 #0b1020',
-      '- **动画节奏**：前 20% 入场，中间 60% 展开，后 20% 收尾',
+      '- **动画节奏**：按实际 cue 和词块时间轴切分，不按整数秒粗切',
       '- **字幕位置**：底部居中，避免遮挡主体',
-      `- **时长适配**：约 ${durationMs ? (durationMs / 1000).toFixed(1) + 's' : '未知'}`,
+      `- **时长适配**：${preciseDuration ? `${preciseDuration}s` : '未知'}，以实际音频/字幕时间轴为准`,
     ].join('\n');
 
     await streamLlmChat(res, {
       fallback,
-      system: '你是 Remotion 视频视觉设计师。根据一段短视频文案和预计时长，给出具体的单场景视觉设计方案。方案必须包含：画面基调、主体元素、色彩方案、动画节奏（按百分比拆分）、字幕位置、时长适配建议。请用 Markdown 输出，语言简洁专业。',
-      user: `sceneId: ${sceneId}\n文案: ${text}\n预计时长: ${durationMs ? (durationMs / 1000).toFixed(1) + '秒' : '未知'}`,
+      system: '你是 Remotion 视频视觉设计师。根据一段短视频文案、精确音频时长和 cue/词块时间轴，给出具体的单场景视觉设计方案。不要把时长四舍五入到整数秒；必须使用 x.x 或 x.xxx 秒和帧数来描述节奏。方案必须包含：画面基调、主体元素、色彩方案、动画节奏（百分比 + 精确秒/帧）、字幕位置、时长适配建议。请用 Markdown 输出，语言简洁专业。',
+      user: `sceneId: ${sceneId}\n文案: ${text}\n精确时长: ${preciseDuration ? `${preciseDuration}秒` : '未知'}\n\n对齐后的字幕/词块时间轴:\n${timing.summary}`,
     });
   } catch (e) {
     sendSse(res, 'error', {error: e.message});

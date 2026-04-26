@@ -466,6 +466,7 @@ function makeSystemPrompt() {
     'Use the provided skills/rules context as an effects cookbook: choose suitable timing, sequencing, text reveal, highlight, transition, chart/diagram, shape, or asset patterns.',
     'The hard constraints are file scope, export shape, existing dependencies, and timing alignment.',
     'Scene length and cue count are variable. Never assume a fixed number of cues or fixed duration.',
+    'Use exact duration and cue/word timing from alignment data. Do not round scene planning to whole seconds when the context provides fractional seconds or frame ranges.',
     'For multi-cue scenes, the main visual composition must process the full cues array at runtime using cues.map/find/findIndex/filter/reduce/some or equivalent logic.',
     'Do not use fixed cue indices such as cues[3], cues.at(5), or cues.slice(2, 4) as the main storytelling structure. Multi-cue scenes must adapt to the runtime cue array.',
     'Do not hard-code narration text, cue title arrays, sentence arrays, or first-cue-only headline text. Use cues, cue.text, and cue.words as runtime data.',
@@ -589,6 +590,8 @@ async function runExternalSceneCli({command, prompt, context, attempt, targetPat
   const externalPrompt = makeExternalCliPrompt(prompt, {context, promptPath, outputPath, targetPath});
   await fs.writeFile(promptPath, externalPrompt.trimEnd() + '\n', 'utf-8');
   await fs.rm(outputPath, {force: true}).catch(() => {});
+  logLine(onLog, `[scene-agent] Wrote external CLI prompt ${path.relative(ROOT, promptPath)}`);
+  logLine(onLog, `[scene-agent] External CLI candidate path ${path.relative(ROOT, outputPath)}`);
 
   const rawTargetPath = path.relative(ROOT, targetPath).replace(/\\/g, '/');
   const rawPromptPath = path.relative(ROOT, promptPath).replace(/\\/g, '/');
@@ -619,6 +622,10 @@ async function runExternalSceneCli({command, prompt, context, attempt, targetPat
     stream: false,
     stdin: command.includes('{promptFile}') || command.includes('{promptFileRaw}') ? null : prompt,
   });
+  const stdoutPreview = result.stdout.trim().slice(-2000);
+  const stderrPreview = result.stderr.trim().slice(-2000);
+  if (stdoutPreview) logLine(onLog, `[scene-agent] External CLI stdout:\n${stdoutPreview}`);
+  if (stderrPreview) logLine(onLog, `[scene-agent] External CLI stderr:\n${stderrPreview}`);
   if (!result.ok) {
     throw new Error(`External codegen CLI failed (exit=${result.code}):\n${[result.stdout.trim(), result.stderr.trim()].filter(Boolean).join('\n').slice(-12000)}`);
   }

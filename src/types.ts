@@ -10,6 +10,7 @@ export type SegmentCue = {
   startFrame: number;
   endFrame: number;
   words: WordCue[];
+  rawWords?: WordCue[];
 };
 
 export type SceneData = {

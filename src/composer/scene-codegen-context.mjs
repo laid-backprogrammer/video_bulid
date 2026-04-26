@@ -41,9 +41,14 @@ const summarizeCues = (cues = []) => cues.map((cue) => ({
     startFrame: word.startFrame,
     endFrame: word.endFrame,
   })),
+  rawWords: (cue.rawWords ?? []).slice(0, 60).map((word) => ({
+    text: word.text,
+    startFrame: word.startFrame,
+    endFrame: word.endFrame,
+  })),
 }));
 
-const secondsFromFrames = (frames, fps) => Number((frames / fps).toFixed(2));
+const secondsFromFrames = (frames, fps) => Number((frames / fps).toFixed(3));
 
 const extractHexColors = (text = '') => [...new Set(String(text).match(/#(?:[0-9a-fA-F]{3}){1,2}\b/g) ?? [])];
 

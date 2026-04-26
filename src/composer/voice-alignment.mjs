@@ -4,11 +4,72 @@ import {readJsonFile} from './json-utils.mjs';
 
 const secondsToFrame = (seconds, fps) => Math.max(0, Math.round(Number(seconds) * fps));
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
+const splitHanRunToChunks = (run) => {
+  const chars = [...String(run ?? '')];
+  if (chars.length <= 4) return chars.length ? [chars.join('')] : [];
+  const chunks = [];
+  let index = 0;
+  while (index < chars.length) {
+    const remaining = chars.length - index;
+    const size = remaining === 3 || remaining === 4 ? remaining : 2;
+    chunks.push(chars.slice(index, index + size).join(''));
+    index += size;
+  }
+  return chunks;
+};
+
 const tokenizeForTiming = (text) => (
   String(text ?? '')
-    .match(/\p{Script=Han}|[A-Za-z0-9]+(?:[-'][A-Za-z0-9]+)?/gu)
+    .match(/\p{Script=Han}+|[A-Za-z0-9]+(?:[-'][A-Za-z0-9]+)?/gu)
+    ?.flatMap((token) => (/^\p{Script=Han}+$/u.test(token) ? splitHanRunToChunks(token) : [token]))
     ?? []
 ).filter(Boolean);
+
+const isHanToken = (text) => /^\p{Script=Han}+$/u.test(String(text ?? ''));
+
+const mergeTimedWordChunks = (words = []) => {
+  const result = [];
+  let buffer = null;
+
+  const flush = () => {
+    if (!buffer) return;
+    result.push(buffer);
+    buffer = null;
+  };
+
+  for (const word of words) {
+    const text = String(word.text ?? '').trim();
+    if (!text) continue;
+    const normalized = {...word, text};
+    const canMerge = isHanToken(text) && [...text].length <= 2;
+    if (!canMerge) {
+      flush();
+      result.push(normalized);
+      continue;
+    }
+
+    if (!buffer) {
+      buffer = {...normalized};
+      continue;
+    }
+
+    const mergedText = `${buffer.text}${text}`;
+    const gap = normalized.startFrame - buffer.endFrame;
+    if (isHanToken(buffer.text) && [...mergedText].length <= 4 && gap <= 3) {
+      buffer = {
+        text: mergedText,
+        startFrame: buffer.startFrame,
+        endFrame: Math.max(buffer.endFrame, normalized.endFrame),
+      };
+    } else {
+      flush();
+      buffer = {...normalized};
+    }
+  }
+
+  flush();
+  return result;
+};
 
 const buildTimedWords = (text, startFrame, endFrame) => {
   const tokens = tokenizeForTiming(text);
@@ -219,12 +280,14 @@ export const makeTranscriptFromTranscription = (transcription, fallbackScript, f
           endFrame: clamp(secondsToFrame(word.end ?? word.start ?? 0, fps), startFrame + 1, endFrame),
         }))
         .filter((word) => word.text.length > 0);
+      const wordChunks = mergeTimedWordChunks(timedWords);
       return {
         id: segment.id ? String(segment.id) : `cue-${index + 1}`,
         startFrame,
         endFrame,
         text,
-        words: timedWords.length > 0 ? timedWords : buildTimedWords(text, startFrame, endFrame),
+        words: wordChunks.length > 0 ? wordChunks : buildTimedWords(text, startFrame, endFrame),
+        rawWords: timedWords,
         emphasis: [],
       };
     }).filter((cue) => cue.text.length > 0);

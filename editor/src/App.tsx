@@ -1253,8 +1253,8 @@ export default function App() {
                                 : '等待生成'}
                           </div>
                           {codegen?.logs?.length ? (
-                            <div style={{...logBoxStyle, maxHeight: 180}}>
-                              {codegen.logs.slice(-24).map((line, i) => (
+                            <div style={{...logBoxStyle, maxHeight: 320}}>
+                              {codegen.logs.slice(-80).map((line, i) => (
                                 <div key={i}>{line}</div>
                               ))}
                             </div>
