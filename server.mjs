@@ -628,7 +628,7 @@ app.get('/api/scene/codegen/status', (req, res) => {
 });
 
 app.post('/api/scene/codegen', async (req, res) => {
-  const {sceneId, model = null, repairs = 1, check = true} = req.body || {};
+  const {sceneId, model = null, repairs = 2, check = true} = req.body || {};
   console.log(`[api/scene/codegen] scene=${sceneId}`);
   if (codegenState.running) {
     return res.status(409).json({error: 'Scene code generation is already running', status: codegenSnapshot()});

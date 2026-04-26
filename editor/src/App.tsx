@@ -576,7 +576,7 @@ export default function App() {
 
   const runSceneCodegen = (sceneId: string) =>
     runAction(`生成 Remotion 代码 ${sceneId}`, async () => {
-      await postJson('/api/scene/codegen', {sceneId, repairs: 1, check: true});
+      await postJson('/api/scene/codegen', {sceneId, repairs: 2, check: true});
       const status = await fetchJson<CodegenStatus>('/api/scene/codegen/status');
       setCodegen(status);
       pushLog(`${sceneId} 已启动 Remotion 代码生成`);

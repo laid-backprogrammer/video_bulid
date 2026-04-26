@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs/promises';
+import {existsSync} from 'node:fs';
 import path from 'node:path';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -9,7 +10,7 @@ import {writeSceneCodegenContext} from './scene-codegen-context.mjs';
 const ROOT = process.cwd();
 const SCRIPT_PATH = path.join(ROOT, 'src/composer/script.json');
 const CONTEXT_DIR = path.join(ROOT, '.scene-codegen');
-const DEFAULT_REPAIR_ATTEMPTS = 1;
+const DEFAULT_REPAIR_ATTEMPTS = 2;
 
 const usage = [
   'Usage: npm run scene:agent -- scene1 [--model model] [--repairs 1] [--no-check] [--dry-run]',
@@ -184,9 +185,32 @@ async function chat(messages, {model} = {}) {
 function extractCode(text) {
   const fenced = [...text.matchAll(/```(?:tsx|ts|typescript|jsx|javascript)?\s*([\s\S]*?)```/gi)];
   if (fenced.length > 0) {
-    return fenced[0][1].trim();
+    return normalizeGeneratedCode(fenced[0][1].trim());
   }
-  return text.trim();
+  return normalizeGeneratedCode(text.trim());
+}
+
+function normalizeGeneratedCode(code) {
+  return code
+    .replace(/from\s+['"]\.\.\/types['"]/g, "from '../../types'")
+    .replace(/from\s+['"]\.\.\/hooks\//g, "from '../../hooks/")
+    .replace(/from\s+['"]\.\.\/components\//g, "from '../../components/");
+}
+
+function relativeImportExists(specifier, sceneId) {
+  if (!specifier.startsWith('.')) return true;
+  const sourceDir = path.join(ROOT, 'src/scenes/generated');
+  const resolved = path.resolve(sourceDir, specifier);
+  const candidates = [
+    resolved,
+    `${resolved}.ts`,
+    `${resolved}.tsx`,
+    `${resolved}.js`,
+    `${resolved}.jsx`,
+    path.join(resolved, 'index.ts'),
+    path.join(resolved, 'index.tsx'),
+  ];
+  return candidates.some((candidate) => existsSync(candidate));
 }
 
 function validateGeneratedCode(code, sceneId) {
@@ -199,6 +223,16 @@ function validateGeneratedCode(code, sceneId) {
   }
   if (!code.includes('SegmentCue')) {
     problems.push('Generated file must type props with SegmentCue');
+  }
+  if (/from\s+['"]\.\.\/(?:types|hooks\/|components\/)/.test(code)) {
+    problems.push('Generated file is in src/scenes/generated; imports to types/hooks/components must use ../../, not ../');
+  }
+  const importMatches = [...code.matchAll(/from\s+['"]([^'"]+)['"]/g)];
+  for (const match of importMatches) {
+    const specifier = match[1];
+    if (!relativeImportExists(specifier, sceneId)) {
+      problems.push(`Relative import does not resolve from src/scenes/generated: ${specifier}`);
+    }
   }
   if (/from\s+['"]fs['"]|from\s+['"]node:|require\s*\(/.test(code)) {
     problems.push('Generated Remotion scene must not import Node APIs or use require()');
@@ -258,6 +292,9 @@ function makeSystemPrompt() {
     'Return exactly one complete TSX file. Do not use Markdown fences or explanations.',
     'You may be visually creative: invent metaphors, layouts, typography, motion, symbolic UI, charts, particles, and transitions.',
     'The hard constraints are file scope, export shape, existing dependencies, and timing alignment.',
+    'The output file is in src/scenes/generated. Use ../../types, ../../hooks/useSceneProgress, ../../components/Background, and ../../components/Captions for local imports outside src/scenes.',
+    'If you copy imports from src/scenes/SceneX.tsx, add one extra ../ because generated files are one directory deeper.',
+    'When hoisting style objects into variables, annotate them as React.CSSProperties to avoid CSS literal types widening to string.',
     'Use cues and word timings as anchors for reveals, highlights, camera moves, and text emphasis.',
     'Keep the scene deterministic and render-safe in Remotion.',
     'Do not use network requests, browser storage, document/window APIs, Node APIs, or new package imports.',

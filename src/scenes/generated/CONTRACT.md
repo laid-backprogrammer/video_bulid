@@ -18,6 +18,14 @@ Rules:
 - Do not edit `Root.tsx`, server files, editor files, package files, or other scene files.
 - Use `durationInFrames` and `cues[].words[]` to drive timing.
 - Keep imports limited to React, `remotion`, local hooks/components, and existing dependencies.
+- This file lives in `src/scenes/generated`, so local imports must use generated-file relative paths:
+  - `../../types`
+  - `../../hooks/useSceneProgress`
+  - `../../components/Background`
+  - `../../components/Captions`
+  - `../SceneX` only if you intentionally delegate to the old base scene.
+- If you copy code from `src/scenes/SceneX.tsx`, add one extra `../` to its local imports because the generated file is one directory deeper.
+- When extracting style objects into constants, type them as `React.CSSProperties` so literal CSS fields such as `textAlign`, `position`, and `fontWeight` do not widen to plain `string`.
 - Do not add network requests or browser-only APIs.
 - Keep text inside the frame and avoid overlapping captions.
 - Run `npx tsc --noEmit` and `npm run editor:build` after changes.
