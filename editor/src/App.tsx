@@ -576,6 +576,10 @@ export default function App() {
 
   const runSceneCodegen = (sceneId: string) =>
     runAction(`生成 Remotion 代码 ${sceneId}`, async () => {
+      if (config) {
+        await postJson('/api/config', config);
+        pushLog('已自动保存当前脚本和画面描述');
+      }
       await postJson('/api/scene/codegen', {sceneId, repairs: 2, check: true});
       const status = await fetchJson<CodegenStatus>('/api/scene/codegen/status');
       setCodegen(status);

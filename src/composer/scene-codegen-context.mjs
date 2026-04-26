@@ -48,14 +48,23 @@ const selectedRuleFiles = [
   'skills/rules/timing.md',
   'skills/rules/animations.md',
   'skills/rules/sequencing.md',
+  'skills/rules/transitions.md',
+  'skills/rules/text-animations.md',
+  'skills/rules/assets/text-animations-typewriter.tsx',
+  'skills/rules/assets/text-animations-word-highlight.tsx',
+  'skills/rules/charts.md',
+  'skills/rules/assets/charts-bar-chart.tsx',
   'skills/rules/display-captions.md',
   'skills/rules/assets.md',
+  'skills/rules/images.md',
+  'skills/rules/fonts.md',
   'skills/rules/measuring-text.md',
 ];
 
 export async function buildSceneCodegenContext(sceneId) {
   const number = sceneNumber(sceneId);
   const script = await readJsonFile(SCRIPT_PATH);
+  const packageJson = await readJsonFile(path.join(ROOT, 'package.json')).catch(() => ({}));
   const scene = script.scenes.find((item) => item.id === sceneId);
   if (!scene) throw new Error(`Scene not found: ${sceneId}`);
 
@@ -79,6 +88,10 @@ export async function buildSceneCodegenContext(sceneId) {
       'npx tsc --noEmit',
       'npm run editor:build',
     ],
+    packageDependencies: Object.keys({
+      ...(packageJson.dependencies ?? {}),
+      ...(packageJson.devDependencies ?? {}),
+    }).sort(),
     scene: {
       text: scene.text,
       designNotes: scene.designNotes ?? '',
@@ -100,6 +113,8 @@ export async function buildSceneCodegenContext(sceneId) {
     '',
     'Be visually creative. The constraints are about where you may write and how timing data must be used, not about making the visual content conservative.',
     'Use the narration, design notes, and word-level timestamps as anchors for an original Remotion scene.',
+    'The creative brief in scene.designNotes and scene.tuningNotes is primary. Translate it into bespoke Remotion visuals, not a generic title/caption template.',
+    'Use the included skill rules as an effects cookbook. Pick animation, text reveal, transition, chart/diagram, shape, or asset patterns that match the brief. Do not copy package imports from examples unless the package exists in package.json.',
     'Scene length and cue count vary. Do not assume the scene is short, do not assume there are only one or two cues, and do not build a first-sentence-only intro. The main visual timeline must respond to every cue in Task JSON.',
     'Do not hard-code narration text, fixed cue title arrays, or fixed sentence arrays. Derive displayed narration and beat state from cues/cue.text/cue.words at runtime. Generic colors, shapes, and layout constants are fine.',
     '',
@@ -107,6 +122,7 @@ export async function buildSceneCodegenContext(sceneId) {
     'Important TypeScript style rule: if a style object is stored in a variable, annotate it as React.CSSProperties so CSS literal fields such as textAlign and position keep valid narrow types.',
     '',
     fenced('Task JSON', 'json', JSON.stringify(context, null, 2)),
+    fenced('Package Dependencies', 'json', await readText('package.json')),
     fenced('Generated Scene Contract', 'md', await readText('src/scenes/generated/CONTRACT.md')),
     fenced('Current Target File', 'tsx', await readText(generatedSceneRel)),
     fenced('Existing Base Scene Reference', 'tsx', await readText(baseSceneRel)),

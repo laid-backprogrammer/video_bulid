@@ -20,6 +20,8 @@ Rules:
 - Scene length and cue count are variable. Do not assume a fixed duration, fixed sentence count, or fixed visual beat count.
 - For multi-cue scenes, the main visual composition must process the full `cues` array with runtime logic such as `cues.map`, `cues.find`, `cues.findIndex`, or `cues.reduce`; using `CaptionOverlay` alone is not enough.
 - Do not hard-code narration text, cue titles, sentence arrays, or first-cue-only headline text. Display narration-derived text from `cues`, `cue.text`, or `cue.words` at runtime.
+- Treat `designNotes` and `tuningNotes` as the creative brief. Generate a bespoke scene from that brief instead of adapting a reusable title/caption template.
+- The main visual layer should contain concrete visual metaphors, diagrams, UI objects, spatial layouts, charts, symbolic objects, or motion systems suggested by the brief. Pure headline cards are not enough.
 - Keep imports limited to React, `remotion`, local hooks/components, and existing dependencies.
 - This file lives in `src/scenes/generated`, so local imports must use generated-file relative paths:
   - `../../types`

@@ -213,6 +213,14 @@ function relativeImportExists(specifier, sceneId) {
   return candidates.some((candidate) => existsSync(candidate));
 }
 
+function packageNameFromImport(specifier) {
+  if (specifier.startsWith('@')) {
+    const [scope, name] = specifier.split('/');
+    return scope && name ? `${scope}/${name}` : specifier;
+  }
+  return specifier.split('/')[0];
+}
+
 function narrationSnippets(context) {
   const snippets = new Set();
   const addPieces = (text) => {
@@ -268,10 +276,17 @@ function validateGeneratedCode(code, context) {
     }
   }
   const importMatches = [...code.matchAll(/from\s+['"]([^'"]+)['"]/g)];
+  const packageDependencies = new Set(context.packageDependencies ?? []);
   for (const match of importMatches) {
     const specifier = match[1];
     if (!relativeImportExists(specifier, sceneId)) {
       problems.push(`Relative import does not resolve from src/scenes/generated: ${specifier}`);
+    }
+    if (!specifier.startsWith('.')) {
+      const packageName = packageNameFromImport(specifier);
+      if (!packageDependencies.has(packageName)) {
+        problems.push(`Package import is not installed in package.json: ${specifier}`);
+      }
     }
   }
   if (/from\s+['"]fs['"]|from\s+['"]node:|require\s*\(/.test(code)) {
@@ -331,11 +346,15 @@ function makeSystemPrompt() {
     'You are a constrained Remotion scene code generation agent.',
     'Return exactly one complete TSX file. Do not use Markdown fences or explanations.',
     'You may be visually creative: invent metaphors, layouts, typography, motion, symbolic UI, charts, particles, and transitions.',
+    'scene.designNotes and scene.tuningNotes are the primary creative brief. Turn them into bespoke Remotion visuals instead of adapting a generic title/caption template.',
+    'Use the provided skills/rules context as an effects cookbook: choose suitable timing, sequencing, text reveal, highlight, transition, chart/diagram, shape, or asset patterns.',
     'The hard constraints are file scope, export shape, existing dependencies, and timing alignment.',
     'Scene length and cue count are variable. Never assume a fixed number of cues or fixed duration.',
     'For multi-cue scenes, the main visual composition must process the full cues array at runtime using cues.map/find/findIndex/filter/reduce/some or equivalent logic.',
     'Do not hard-code narration text, cue title arrays, sentence arrays, or first-cue-only headline text. Use cues, cue.text, and cue.words as runtime data.',
     'CaptionOverlay may be used, but it cannot be the only part of the scene that follows the cues.',
+    'Pure centered headline cards, subtitle-only scenes, or generic cue lists are unacceptable when design notes ask for visual scenes, objects, diagrams, or transitions.',
+    'Only import packages listed in package.json. If a skill example imports an unavailable package, adapt the idea using React/CSS/SVG/remotion APIs instead.',
     'The output file is in src/scenes/generated. Use ../../types, ../../hooks/useSceneProgress, ../../components/Background, and ../../components/Captions for local imports outside src/scenes.',
     'If you copy imports from src/scenes/SceneX.tsx, add one extra ../ because generated files are one directory deeper.',
     'When hoisting style objects into variables, annotate them as React.CSSProperties to avoid CSS literal types widening to string.',
@@ -351,6 +370,7 @@ function makeInitialUserPrompt(contextMarkdown) {
     'Only output the full contents of the target SceneX.generated.tsx file.',
     'The generated visual must cover all cues in the Task JSON, not just the first sentence.',
     'Derive any narration text from props.cues at runtime instead of embedding copied scene text into string literals.',
+    'Follow scene.designNotes and scene.tuningNotes directly. If they describe illustrations, transitions, charts, objects, or pacing, implement those as visual systems in code.',
     '',
     contextMarkdown,
   ].join('\n');
