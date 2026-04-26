@@ -547,6 +547,11 @@ export default function App() {
       pushLog('脚本配置已保存');
     });
 
+  const updateConfigField = <K extends keyof Config>(field: K, value: Config[K]) => {
+    if (!config) return;
+    setConfig({...config, [field]: value});
+  };
+
   const updateSceneField = (sceneId: string, field: keyof ScriptScene, value: string) => {
     if (!config) return;
     setConfig({
@@ -797,6 +802,14 @@ export default function App() {
               </p>
             </div>
             <div style={{display: 'flex', gap: 8}}>
+              <input
+                aria-label="LLM model"
+                value={config.llmModel ?? ''}
+                onChange={(e) => updateConfigField('llmModel', e.target.value)}
+                placeholder="gpt-5.5"
+                style={modelInputStyle}
+                disabled={anyRunning}
+              />
               <button type="button" style={buttonStyle('#8be9fd', anyRunning)} onClick={saveConfig} disabled={anyRunning}>
                 保存脚本
               </button>
@@ -1524,6 +1537,7 @@ const globalActionsStyle: React.CSSProperties = {display: 'flex', gap: 10, align
 const sceneListStyle: React.CSSProperties = {display: 'grid', gap: 10};
 const sceneCardStyle: React.CSSProperties = {background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 12};
 const sceneHeaderStyle: React.CSSProperties = {display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 14px', cursor: 'pointer'};
+const modelInputStyle: React.CSSProperties = {width: 150, borderRadius: 10, border: '1px solid rgba(139,233,253,0.25)', background: '#070b16', color: '#e6edf3', padding: '9px 10px', fontSize: 13, fontWeight: 700};
 const textareaStyle: React.CSSProperties = {width: '100%', boxSizing: 'border-box', resize: 'vertical', borderRadius: 10, border: '1px solid rgba(255,255,255,0.1)', background: '#070b16', color: '#e6edf3', padding: 10, lineHeight: 1.5, fontSize: 14};
 const actionRowStyle: React.CSSProperties = {display: 'flex', gap: 8, flexWrap: 'wrap', padding: '0 14px 12px'};
 const panelCardStyle: React.CSSProperties = {background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 12, padding: 14, marginBottom: 12};

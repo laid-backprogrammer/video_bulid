@@ -337,7 +337,7 @@ async function getLlmSettings() {
   return {
     apiKey,
     baseUrl,
-    model: process.env.OPENAI_MODEL || script.llmModel || 'gpt-4o-mini',
+    model: script.llmModel || process.env.OPENAI_MODEL || 'gpt-4o-mini',
   };
 }
 

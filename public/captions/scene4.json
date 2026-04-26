@@ -1,9 +1,91 @@
-﻿{
+{
   "id": "scene4",
-  "text": "test",
-  "audioFile": "public/voiceover/scene4.mp3",
-  "durationInFrames": 120,
+  "text": "越来越觉得一个更实际的问题是：",
+  "audioFile": "public\\voiceover\\scene4.mp3",
+  "durationInFrames": 98,
   "cues": [
-    {"id":"cue-1","text":"测试文案","startFrame":0,"endFrame":60,"words":[{"text":"测","startFrame":0,"endFrame":15},{"text":"试","startFrame":15,"endFrame":30},{"text":"文","startFrame":30,"endFrame":45},{"text":"案","startFrame":45,"endFrame":60}],"emphasis":[]}
-  ]
+    {
+      "id": "cue-1",
+      "startFrame": 0,
+      "endFrame": 98,
+      "text": "越来越觉得一个更实际的问题是：",
+      "words": [
+        {
+          "text": "越",
+          "startFrame": 0,
+          "endFrame": 7
+        },
+        {
+          "text": "来",
+          "startFrame": 7,
+          "endFrame": 14
+        },
+        {
+          "text": "越",
+          "startFrame": 14,
+          "endFrame": 21
+        },
+        {
+          "text": "觉",
+          "startFrame": 21,
+          "endFrame": 28
+        },
+        {
+          "text": "得",
+          "startFrame": 28,
+          "endFrame": 35
+        },
+        {
+          "text": "一",
+          "startFrame": 35,
+          "endFrame": 42
+        },
+        {
+          "text": "个",
+          "startFrame": 42,
+          "endFrame": 49
+        },
+        {
+          "text": "更",
+          "startFrame": 49,
+          "endFrame": 56
+        },
+        {
+          "text": "实",
+          "startFrame": 56,
+          "endFrame": 63
+        },
+        {
+          "text": "际",
+          "startFrame": 63,
+          "endFrame": 70
+        },
+        {
+          "text": "的",
+          "startFrame": 70,
+          "endFrame": 77
+        },
+        {
+          "text": "问",
+          "startFrame": 77,
+          "endFrame": 84
+        },
+        {
+          "text": "题",
+          "startFrame": 84,
+          "endFrame": 91
+        },
+        {
+          "text": "是",
+          "startFrame": 91,
+          "endFrame": 98
+        }
+      ],
+      "emphasis": []
+    }
+  ],
+  "alignedAt": "2026-04-26T02:34:45.540Z",
+  "alignmentSource": "estimated",
+  "wordCount": 14,
+  "wordTimingSource": "estimated"
 }

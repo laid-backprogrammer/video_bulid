@@ -1,9 +1,110 @@
-﻿{
+{
   "id": "scene6",
-  "text": "test",
-  "audioFile": "public/voiceover/scene6.mp3",
-  "durationInFrames": 120,
+  "text": "把不同场景混在一起，讨论就一定失真。",
+  "audioFile": "public\\voiceover\\scene6.mp3",
+  "durationInFrames": 137,
   "cues": [
-    {"id":"cue-1","text":"测试文案","startFrame":0,"endFrame":60,"words":[{"text":"测","startFrame":0,"endFrame":15},{"text":"试","startFrame":15,"endFrame":30},{"text":"文","startFrame":30,"endFrame":45},{"text":"案","startFrame":45,"endFrame":60}],"emphasis":[]}
-  ]
+    {
+      "id": "cue-1",
+      "startFrame": 0,
+      "endFrame": 77,
+      "text": "把不同场景混在一起",
+      "words": [
+        {
+          "text": "把",
+          "startFrame": 0,
+          "endFrame": 8
+        },
+        {
+          "text": "不",
+          "startFrame": 8,
+          "endFrame": 17
+        },
+        {
+          "text": "同",
+          "startFrame": 17,
+          "endFrame": 25
+        },
+        {
+          "text": "场",
+          "startFrame": 25,
+          "endFrame": 34
+        },
+        {
+          "text": "景",
+          "startFrame": 34,
+          "endFrame": 42
+        },
+        {
+          "text": "混",
+          "startFrame": 42,
+          "endFrame": 51
+        },
+        {
+          "text": "在",
+          "startFrame": 51,
+          "endFrame": 59
+        },
+        {
+          "text": "一",
+          "startFrame": 59,
+          "endFrame": 68
+        },
+        {
+          "text": "起",
+          "startFrame": 68,
+          "endFrame": 77
+        }
+      ],
+      "emphasis": []
+    },
+    {
+      "id": "cue-2",
+      "startFrame": 77,
+      "endFrame": 137,
+      "text": "讨论就一定失真",
+      "words": [
+        {
+          "text": "讨",
+          "startFrame": 77,
+          "endFrame": 85
+        },
+        {
+          "text": "论",
+          "startFrame": 85,
+          "endFrame": 94
+        },
+        {
+          "text": "就",
+          "startFrame": 94,
+          "endFrame": 102
+        },
+        {
+          "text": "一",
+          "startFrame": 102,
+          "endFrame": 111
+        },
+        {
+          "text": "定",
+          "startFrame": 111,
+          "endFrame": 119
+        },
+        {
+          "text": "失",
+          "startFrame": 119,
+          "endFrame": 128
+        },
+        {
+          "text": "真",
+          "startFrame": 128,
+          "endFrame": 137
+        }
+      ],
+      "emphasis": []
+    }
+  ],
+  "alignedAt": "2026-04-26T02:34:52.611Z",
+  "alignmentSource": "estimated",
+  "wordCount": 16,
+  "wordTimingSource": "estimated"
 }

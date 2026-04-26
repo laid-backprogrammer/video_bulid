@@ -1,9 +1,65 @@
-﻿{
+{
   "id": "scene7",
-  "text": "test",
-  "audioFile": "public/voiceover/scene7.mp3",
-  "durationInFrames": 120,
+  "text": "先问场景，再谈 Agent。",
+  "audioFile": "public\\voiceover\\scene7.mp3",
+  "durationInFrames": 80,
   "cues": [
-    {"id":"cue-1","text":"测试文案","startFrame":0,"endFrame":60,"words":[{"text":"测","startFrame":0,"endFrame":15},{"text":"试","startFrame":15,"endFrame":30},{"text":"文","startFrame":30,"endFrame":45},{"text":"案","startFrame":45,"endFrame":60}],"emphasis":[]}
-  ]
+    {
+      "id": "cue-1",
+      "startFrame": 0,
+      "endFrame": 46,
+      "text": "先问场景",
+      "words": [
+        {
+          "text": "先",
+          "startFrame": 0,
+          "endFrame": 11
+        },
+        {
+          "text": "问",
+          "startFrame": 11,
+          "endFrame": 23
+        },
+        {
+          "text": "场",
+          "startFrame": 23,
+          "endFrame": 34
+        },
+        {
+          "text": "景",
+          "startFrame": 34,
+          "endFrame": 46
+        }
+      ],
+      "emphasis": []
+    },
+    {
+      "id": "cue-2",
+      "startFrame": 46,
+      "endFrame": 80,
+      "text": "再谈 Agent",
+      "words": [
+        {
+          "text": "再",
+          "startFrame": 46,
+          "endFrame": 57
+        },
+        {
+          "text": "谈",
+          "startFrame": 57,
+          "endFrame": 68
+        },
+        {
+          "text": "Agent",
+          "startFrame": 68,
+          "endFrame": 80
+        }
+      ],
+      "emphasis": []
+    }
+  ],
+  "alignedAt": "2026-04-26T02:34:56.320Z",
+  "alignmentSource": "estimated",
+  "wordCount": 7,
+  "wordTimingSource": "estimated"
 }
