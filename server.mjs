@@ -75,6 +75,7 @@ const ttsState = {
 const codegenState = {
   running: false,
   sceneId: null,
+  provider: null,
   step: 'idle',
   message: '未开始',
   startTime: null,
@@ -628,7 +629,7 @@ app.get('/api/scene/codegen/status', (req, res) => {
 });
 
 app.post('/api/scene/codegen', async (req, res) => {
-  const {sceneId, model = null, repairs = 2, check = true} = req.body || {};
+  const {sceneId, model = null, provider = null, cliCommand = null, repairs = 2, check = true} = req.body || {};
   console.log(`[api/scene/codegen] scene=${sceneId}`);
   if (codegenState.running) {
     return res.status(409).json({error: 'Scene code generation is already running', status: codegenSnapshot()});
@@ -646,6 +647,7 @@ app.post('/api/scene/codegen', async (req, res) => {
     Object.assign(codegenState, {
       running: true,
       sceneId,
+      provider,
       step: 'starting',
       message: `准备生成 ${sceneId} Remotion 代码`,
       startTime: Date.now(),
@@ -660,6 +662,8 @@ app.post('/api/scene/codegen', async (req, res) => {
     runSceneAgent({
       sceneId,
       model,
+      provider,
+      cliCommand,
       repairs: repairAttempts,
       check: check !== false,
       onLog: (line) => {

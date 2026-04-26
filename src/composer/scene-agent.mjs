@@ -13,7 +13,7 @@ const CONTEXT_DIR = path.join(ROOT, '.scene-codegen');
 const DEFAULT_REPAIR_ATTEMPTS = 2;
 
 const usage = [
-  'Usage: npm run scene:agent -- scene1 [--model model] [--repairs 1] [--no-check] [--dry-run]',
+  'Usage: npm run scene:agent -- scene1 [--model model] [--provider openai|external-cli] [--cli-command command] [--repairs 1] [--no-check] [--dry-run]',
   '',
   'Generates one Remotion scene file under src/scenes/generated/SceneX.generated.tsx.',
 ].join('\n');
@@ -22,6 +22,8 @@ function parseArgs(argv) {
   const args = {
     sceneId: null,
     model: process.env.SCENE_AGENT_MODEL || null,
+    provider: null,
+    cliCommand: process.env.SCENE_AGENT_CLI_COMMAND || null,
     repairs: DEFAULT_REPAIR_ATTEMPTS,
     check: true,
     dryRun: false,
@@ -31,6 +33,10 @@ function parseArgs(argv) {
     const arg = argv[i];
     if (arg === '--model') {
       args.model = argv[++i];
+    } else if (arg === '--provider') {
+      args.provider = argv[++i];
+    } else if (arg === '--cli-command') {
+      args.cliCommand = argv[++i];
     } else if (arg === '--repairs') {
       args.repairs = Number(argv[++i]);
     } else if (arg === '--no-check') {
@@ -51,6 +57,9 @@ function parseArgs(argv) {
   }
   if (!Number.isInteger(args.repairs) || args.repairs < 0 || args.repairs > 3) {
     throw new Error('--repairs must be an integer from 0 to 3');
+  }
+  if (args.provider && !['openai', 'external-cli'].includes(args.provider)) {
+    throw new Error('--provider must be openai or external-cli');
   }
   return args;
 }
@@ -106,6 +115,41 @@ function runCommand(command, args, options = {}) {
   });
 }
 
+function runShellCommand(command, options = {}) {
+  return new Promise((resolve) => {
+    const child = spawn(command, {
+      cwd: ROOT,
+      shell: true,
+      windowsHide: true,
+      env: process.env,
+    });
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout?.on('data', (chunk) => {
+      stdout += chunk.toString();
+      if (options.stream) process.stdout.write(chunk);
+    });
+    child.stderr?.on('data', (chunk) => {
+      stderr += chunk.toString();
+      if (options.stream) process.stderr.write(chunk);
+    });
+    child.on('error', (error) => {
+      resolve({ok: false, code: null, stdout, stderr: stderr + error.message});
+    });
+    child.on('close', (code) => {
+      resolve({ok: code === 0, code, stdout, stderr});
+    });
+    child.stdin?.on('error', () => {});
+    if (typeof options.stdin === 'string' && options.stdin.length > 0) {
+      child.stdin?.write(options.stdin);
+      child.stdin?.end();
+    } else {
+      child.stdin?.destroy();
+    }
+  });
+}
+
 function logLine(onLog, line) {
   console.log(line);
   onLog?.(line);
@@ -145,6 +189,24 @@ async function getLlmSettings(modelOverride) {
     baseUrl,
     model: modelOverride || script.llmModel || process.env.OPENAI_MODEL || 'gpt-4o-mini',
   };
+}
+
+async function getCodegenSettings(options = {}) {
+  const script = await readJsonFile(SCRIPT_PATH).catch(() => ({}));
+  const provider = options.provider
+    || process.env.SCENE_AGENT_PROVIDER
+    || script.codegenProvider
+    || 'openai';
+  const cliCommand = options.cliCommand
+    || process.env.SCENE_AGENT_CLI_COMMAND
+    || script.codegenCliCommand
+    || '';
+
+  if (!['openai', 'external-cli'].includes(provider)) {
+    throw new Error(`Unsupported codegen provider: ${provider}`);
+  }
+
+  return {provider, cliCommand};
 }
 
 async function chat(messages, {model, temperature = 0.4} = {}) {
@@ -487,6 +549,63 @@ function makeRepairPrompt(contextMarkdown, blueprint, code, validationError) {
   ].join('\n');
 }
 
+function quoteArg(value) {
+  return `"${String(value).replace(/"/g, '\\"')}"`;
+}
+
+function fillCommandTemplate(command, replacements) {
+  return command.replace(/\{([a-zA-Z][a-zA-Z0-9]*)\}/g, (match, key) => {
+    if (Object.hasOwn(replacements, key)) return replacements[key];
+    return match;
+  });
+}
+
+async function runExternalSceneCli({command, prompt, context, attempt, targetPath, promptPath, outputPath, onLog}) {
+  if (!command?.trim()) {
+    throw new Error('Missing external codegen CLI command. Set script.codegenCliCommand or SCENE_AGENT_CLI_COMMAND.');
+  }
+
+  await fs.mkdir(CONTEXT_DIR, {recursive: true});
+  await fs.writeFile(promptPath, prompt.trimEnd() + '\n', 'utf-8');
+  await fs.rm(outputPath, {force: true}).catch(() => {});
+
+  const rawTargetPath = path.relative(ROOT, targetPath).replace(/\\/g, '/');
+  const rawPromptPath = path.relative(ROOT, promptPath).replace(/\\/g, '/');
+  const rawOutputPath = path.relative(ROOT, outputPath).replace(/\\/g, '/');
+  const commandText = fillCommandTemplate(command, {
+    sceneId: context.sceneId,
+    attempt: String(attempt),
+    promptFile: quoteArg(promptPath),
+    promptFileRaw: rawPromptPath,
+    contextFile: quoteArg(path.join(CONTEXT_DIR, `${context.sceneId}.codegen.md`)),
+    contextFileRaw: `.scene-codegen/${context.sceneId}.codegen.md`,
+    outputFile: quoteArg(outputPath),
+    outputFileRaw: rawOutputPath,
+    targetFile: quoteArg(targetPath),
+    targetFileRaw: rawTargetPath,
+  });
+
+  logLine(onLog, `[scene-agent] Running external CLI: ${commandText}`);
+  const result = await runShellCommand(commandText, {
+    stream: false,
+    stdin: command.includes('{promptFile}') || command.includes('{promptFileRaw}') ? null : prompt,
+  });
+  if (!result.ok) {
+    throw new Error(`External codegen CLI failed (exit=${result.code}):\n${[result.stdout.trim(), result.stderr.trim()].filter(Boolean).join('\n').slice(-12000)}`);
+  }
+
+  const outputCode = await fs.readFile(outputPath, 'utf-8').catch(() => '');
+  if (outputCode.trim()) return extractCode(outputCode);
+
+  const stdout = result.stdout.trim();
+  if (stdout) return extractCode(stdout);
+
+  const targetCode = await fs.readFile(targetPath, 'utf-8').catch(() => '');
+  if (targetCode.trim()) return extractCode(targetCode);
+
+  throw new Error('External codegen CLI produced no TSX on stdout, outputFile, or targetFile.');
+}
+
 async function planSceneBlueprint(contextMarkdown, {model}) {
   return chat([
     {role: 'system', content: makeBlueprintSystemPrompt()},
@@ -510,10 +629,40 @@ async function repairScene(contextMarkdown, blueprint, code, validationError, {m
   return extractCode(response);
 }
 
+async function generateSceneWithExternalCli(contextMarkdown, blueprint, context, settings, paths, attempt, onLog) {
+  const prompt = makeInitialUserPrompt(contextMarkdown, blueprint);
+  return runExternalSceneCli({
+    command: settings.cliCommand,
+    prompt,
+    context,
+    attempt,
+    targetPath: paths.targetPath,
+    promptPath: paths.promptPath,
+    outputPath: paths.outputPath,
+    onLog,
+  });
+}
+
+async function repairSceneWithExternalCli(contextMarkdown, blueprint, code, validationError, context, settings, paths, attempt, onLog) {
+  const prompt = makeRepairPrompt(contextMarkdown, blueprint, code, validationError);
+  return runExternalSceneCli({
+    command: settings.cliCommand,
+    prompt,
+    context,
+    attempt,
+    targetPath: paths.targetPath,
+    promptPath: paths.promptPath,
+    outputPath: paths.outputPath,
+    onLog,
+  });
+}
+
 export async function runSceneAgent(options = {}) {
   const args = {
     sceneId: options.sceneId,
     model: options.model ?? process.env.SCENE_AGENT_MODEL ?? null,
+    provider: options.provider ?? null,
+    cliCommand: options.cliCommand ?? process.env.SCENE_AGENT_CLI_COMMAND ?? null,
     repairs: options.repairs ?? DEFAULT_REPAIR_ATTEMPTS,
     check: options.check ?? true,
     dryRun: options.dryRun ?? false,
@@ -526,14 +675,21 @@ export async function runSceneAgent(options = {}) {
     throw new Error('repairs must be an integer from 0 to 3');
   }
 
+  const codegenSettings = await getCodegenSettings(args);
   const {markdown, json} = await buildContext(args.sceneId, {onLog: args.onLog});
   const targetPath = ensureAllowedTarget(json.targetFile, json.allowedWriteFiles);
   const previousCode = args.check ? await fs.readFile(targetPath, 'utf-8').catch(() => null) : null;
+  const externalPaths = {
+    targetPath,
+    promptPath: path.join(CONTEXT_DIR, `${args.sceneId}.codegen.external.md`),
+    outputPath: path.join(CONTEXT_DIR, `${args.sceneId}.codegen.external.candidate.tsx`),
+  };
 
   if (args.dryRun) {
     logLine(args.onLog, `[scene-agent] Dry run OK`);
     logLine(args.onLog, `[scene-agent] Context: ${path.relative(ROOT, path.join(CONTEXT_DIR, `${args.sceneId}.codegen.md`))}`);
     logLine(args.onLog, `[scene-agent] Target: ${path.relative(ROOT, targetPath)}`);
+    logLine(args.onLog, `[scene-agent] Provider: ${codegenSettings.provider}`);
     return {
       sceneId: args.sceneId,
       targetFile: path.relative(ROOT, targetPath).replace(/\\/g, '/'),
@@ -542,18 +698,26 @@ export async function runSceneAgent(options = {}) {
   }
 
   logLine(args.onLog, `[scene-agent] Generating ${path.relative(ROOT, targetPath)}`);
-  logLine(args.onLog, `[scene-agent] Planning brief for ${args.sceneId}`);
-  let blueprint = await planSceneBlueprint(markdown, {model: args.model});
-  if (looksLikeMojibake(blueprint)) {
-    logLine(args.onLog, '[scene-agent] Planning brief contained mojibake; using local context fallback blueprint');
-    blueprint = buildFallbackBlueprint(json);
+  logLine(args.onLog, `[scene-agent] Provider: ${codegenSettings.provider}`);
+  let blueprint = buildFallbackBlueprint(json);
+  if (codegenSettings.provider === 'openai') {
+    logLine(args.onLog, `[scene-agent] Planning brief for ${args.sceneId}`);
+    blueprint = await planSceneBlueprint(markdown, {model: args.model});
+    if (looksLikeMojibake(blueprint)) {
+      logLine(args.onLog, '[scene-agent] Planning brief contained mojibake; using local context fallback blueprint');
+      blueprint = buildFallbackBlueprint(json);
+    }
+  } else {
+    logLine(args.onLog, `[scene-agent] Using local context blueprint for ${args.sceneId}`);
   }
   const blueprintPath = path.join(CONTEXT_DIR, `${args.sceneId}.codegen.blueprint.md`);
   await fs.mkdir(CONTEXT_DIR, {recursive: true});
   await fs.writeFile(blueprintPath, blueprint.trimEnd() + '\n', 'utf-8');
   logLine(args.onLog, `Wrote ${path.relative(ROOT, blueprintPath)}`);
 
-  let code = await generateScene(markdown, blueprint, {model: args.model});
+  let code = codegenSettings.provider === 'external-cli'
+    ? await generateSceneWithExternalCli(markdown, blueprint, json, codegenSettings, externalPaths, 0, args.onLog)
+    : await generateScene(markdown, blueprint, {model: args.model});
 
   try {
     for (let attempt = 0; attempt <= args.repairs; attempt += 1) {
@@ -583,8 +747,10 @@ export async function runSceneAgent(options = {}) {
         const repairReason = message.includes('Generated code failed local guards')
           ? 'Local guards failed'
           : 'Validation failed';
-        logLine(args.onLog, `[scene-agent] ${repairReason}, asking LLM to repair (${attempt + 1}/${args.repairs})`);
-        code = await repairScene(markdown, blueprint, code, message, {model: args.model});
+        logLine(args.onLog, `[scene-agent] ${repairReason}, asking ${codegenSettings.provider} to repair (${attempt + 1}/${args.repairs})`);
+        code = codegenSettings.provider === 'external-cli'
+          ? await repairSceneWithExternalCli(markdown, blueprint, code, message, json, codegenSettings, externalPaths, attempt + 1, args.onLog)
+          : await repairScene(markdown, blueprint, code, message, {model: args.model});
       }
     }
   } catch (error) {

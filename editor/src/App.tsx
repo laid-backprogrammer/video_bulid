@@ -58,6 +58,8 @@ type Config = {
   llmBaseUrl?: string;
   llmModel?: string;
   llmApiKey?: string;
+  codegenProvider?: 'openai' | 'external-cli' | string;
+  codegenCliCommand?: string;
   scenes: ScriptScene[];
 };
 
@@ -801,7 +803,17 @@ export default function App() {
                 {anyRunning ? ' · 处理中…' : ''}
               </p>
             </div>
-            <div style={{display: 'flex', gap: 8}}>
+            <div style={{display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end'}}>
+              <select
+                aria-label="Codegen provider"
+                value={config.codegenProvider ?? 'openai'}
+                onChange={(e) => updateConfigField('codegenProvider', e.target.value)}
+                style={providerSelectStyle}
+                disabled={anyRunning}
+              >
+                <option value="openai">OpenAI</option>
+                <option value="external-cli">External CLI</option>
+              </select>
               <input
                 aria-label="LLM model"
                 value={config.llmModel ?? ''}
@@ -810,6 +822,16 @@ export default function App() {
                 style={modelInputStyle}
                 disabled={anyRunning}
               />
+              {config.codegenProvider === 'external-cli' ? (
+                <input
+                  aria-label="Codegen CLI command"
+                  value={config.codegenCliCommand ?? ''}
+                  onChange={(e) => updateConfigField('codegenCliCommand', e.target.value)}
+                  placeholder="kimi --prompt-file {promptFile} --output {outputFile}"
+                  style={cliCommandInputStyle}
+                  disabled={anyRunning}
+                />
+              ) : null}
               <button type="button" style={buttonStyle('#8be9fd', anyRunning)} onClick={saveConfig} disabled={anyRunning}>
                 保存脚本
               </button>
@@ -1537,7 +1559,9 @@ const globalActionsStyle: React.CSSProperties = {display: 'flex', gap: 10, align
 const sceneListStyle: React.CSSProperties = {display: 'grid', gap: 10};
 const sceneCardStyle: React.CSSProperties = {background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 12};
 const sceneHeaderStyle: React.CSSProperties = {display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 14px', cursor: 'pointer'};
+const providerSelectStyle: React.CSSProperties = {borderRadius: 10, border: '1px solid rgba(139,233,253,0.25)', background: '#070b16', color: '#e6edf3', padding: '9px 10px', fontSize: 13, fontWeight: 700};
 const modelInputStyle: React.CSSProperties = {width: 150, borderRadius: 10, border: '1px solid rgba(139,233,253,0.25)', background: '#070b16', color: '#e6edf3', padding: '9px 10px', fontSize: 13, fontWeight: 700};
+const cliCommandInputStyle: React.CSSProperties = {width: 360, maxWidth: '42vw', borderRadius: 10, border: '1px solid rgba(189,147,249,0.3)', background: '#070b16', color: '#e6edf3', padding: '9px 10px', fontSize: 13, fontFamily: 'Consolas, monospace'};
 const textareaStyle: React.CSSProperties = {width: '100%', boxSizing: 'border-box', resize: 'vertical', borderRadius: 10, border: '1px solid rgba(255,255,255,0.1)', background: '#070b16', color: '#e6edf3', padding: 10, lineHeight: 1.5, fontSize: 14};
 const actionRowStyle: React.CSSProperties = {display: 'flex', gap: 8, flexWrap: 'wrap', padding: '0 14px 12px'};
 const panelCardStyle: React.CSSProperties = {background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 12, padding: 14, marginBottom: 12};
