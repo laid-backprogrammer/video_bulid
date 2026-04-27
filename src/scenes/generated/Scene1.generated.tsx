@@ -22,10 +22,8 @@ const clampInterpolate = (
 		easing,
 	});
 
-const resolveAssetPath = (asset?: SceneAsset) =>
-	(asset?.file ?? 'public/assets/scenes/scene1/asset_1777295027210_xzt4hp-2026-04-17-000238.png')
-		.replace(/^public[\\/]/, '')
-		.replace(/\\/g, '/');
+const resolveAssetPath = (asset: SceneAsset) =>
+	asset.file.replace(/^public[\\/]/, '').replace(/\\/g, '/');
 
 const getAllWords = (cues: SegmentCue[]): WordCue[] =>
 	cues.reduce<WordCue[]>((acc, cue) => {
@@ -313,9 +311,7 @@ export const Scene1Generated: React.FC<{
 		return cues.map((cue) => cue.text).join('');
 	}, [allWords, cues]);
 
-	const renderAsset =
-		assets?.find((asset) => asset.role === 'render' || asset.role === 'both') ??
-		assets?.find((asset) => asset.id === 'asset_1777295027210_xzt4hp');
+	const renderAsset = assets?.find((asset) => asset.role === 'render' || asset.role === 'both');
 
 	const bgFade = clampInterpolate(frame, [0, (15 / 114) * durationInFrames], [0, 1]);
 	const bgScale = clampInterpolate(frame, [0, (15 / 114) * durationInFrames], [1.04, 1]);
@@ -417,7 +413,7 @@ export const Scene1Generated: React.FC<{
 	);
 	const sweepOpacity = Math.min(sweepOpacityIn, sweepOpacityOut);
 
-	const productPath = resolveAssetPath(renderAsset);
+	const productPath = renderAsset ? resolveAssetPath(renderAsset) : null;
 
 	const rootStyle: React.CSSProperties = {
 		background: '#000000',
@@ -500,6 +496,8 @@ export const Scene1Generated: React.FC<{
 				{titleText}
 			</div>
 
+			{productPath ? (
+				<>
 			<div
 				style={{
 					position: 'absolute',
@@ -570,6 +568,8 @@ export const Scene1Generated: React.FC<{
 					pointerEvents: 'none',
 				}}
 			/>
+				</>
+			) : null}
 
 			<CustomCaption cues={cues} durationInFrames={durationInFrames} />
 		</AbsoluteFill>

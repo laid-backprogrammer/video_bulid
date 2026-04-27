@@ -408,9 +408,14 @@ function validateGeneratedCode(code, context) {
     problems.push('Generated Remotion scene must not use network or browser globals');
   }
   for (const asset of context.scene?.assets ?? []) {
+    const publicPath = String(asset.file || '').replace(/\\/g, '/');
+    const staticPath = asset.staticFilePath || toRemotionStaticFilePath(publicPath);
+    const hardcodedAssetTokens = [asset.id, publicPath, staticPath].filter(Boolean);
+    const hardcodedAssetToken = hardcodedAssetTokens.find((token) => code.includes(token));
+    if (hardcodedAssetToken) {
+      problems.push(`Do not hard-code uploaded image ids or paths in generated scenes; select assets from the assets prop at runtime instead: ${hardcodedAssetToken}`);
+    }
     if (asset.role === 'reference') {
-      const publicPath = String(asset.file || '').replace(/\\/g, '/');
-      const staticPath = asset.staticFilePath || toRemotionStaticFilePath(publicPath);
       if (publicPath && (code.includes(publicPath) || code.includes(staticPath))) {
         problems.push(`Reference-only image must not be rendered directly: ${asset.name || asset.id}`);
       }
@@ -476,6 +481,7 @@ function makeSystemPrompt() {
     'If the brief names concrete visual elements such as silhouettes, circles, icons, charts, cards, interfaces, maps, or diagrams, render those as actual layers rather than collapsing them into one centered headline.',
     'If user images are provided, respect their roles: role=render means a visible image asset available through assets[] and Img/staticFile; role=reference means style/effect/layout reference only and should not be automatically rendered; role=both can be used for either purpose.',
     'When rendering image assets, type props with optional assets?: SceneAsset[], import SceneAsset from ../../types, derive the Remotion path with asset.file.replace(/^public[\\\\/]/, "").replace(/\\\\/g, "/"), and use <Img src={staticFile(path)} />. Never use native <img> or CSS background-image.',
+    'Never copy concrete uploaded asset ids or public/assets/scenes paths into generated code, even if designNotes contains them. Select renderable images from the runtime assets prop by role, and render nothing or a non-image fallback when no matching asset exists.',
     'If the brief specifies hex colors, reuse those colors or very close variants in the code.',
     'If the brief specifies subtitle placement, keep captions in that region unless the brief itself changes it.',
     'If the brief specifies pacing sections such as 0%-20%, 20%-50%, or cue-by-cue transitions, map those beats onto frame ranges and visible visual changes.',

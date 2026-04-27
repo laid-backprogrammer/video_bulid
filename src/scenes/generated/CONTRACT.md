@@ -26,6 +26,7 @@ Rules:
   - `render`: visible Remotion image material. Render with `Img` from `remotion` and `staticFile(asset.file.replace(/^public[\\/]/, '').replace(/\\/g, '/'))`.
   - `reference`: visual reference only. Match its style, layout, lighting, product/character look, or page effect; do not automatically place it into the frame.
   - `both`: may be rendered and used as a visual reference.
+- Do not hard-code uploaded image ids, filenames, or `public/assets/scenes/...` paths. Always choose images from the runtime `assets` prop by role and render no image, or a non-image fallback, if the asset was deleted.
 - The main visual layer should contain concrete visual metaphors, diagrams, UI objects, spatial layouts, charts, symbolic objects, or motion systems suggested by the brief. Pure headline cards are not enough.
 - Keep imports limited to React, `remotion`, local hooks/components, and existing dependencies.
 - This file lives in `src/scenes/generated`, so local imports must use generated-file relative paths:
