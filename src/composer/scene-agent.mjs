@@ -6,6 +6,7 @@ import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {readJsonFile} from './json-utils.mjs';
 import {writeSceneCodegenContext} from './scene-codegen-context.mjs';
+import {toRemotionStaticFilePath} from './scene-assets.mjs';
 
 const ROOT = process.cwd();
 const SCRIPT_PATH = path.join(ROOT, 'src/composer/script.json');
@@ -13,7 +14,7 @@ const CONTEXT_DIR = path.join(ROOT, '.scene-codegen');
 const DEFAULT_REPAIR_ATTEMPTS = 2;
 
 const usage = [
-  'Usage: npm run scene:agent -- scene1 [--model model] [--provider openai|external-cli] [--cli-command command] [--repairs 1] [--no-check] [--dry-run]',
+  'Usage: npm run scene:agent -- scene1 [--model model] [--provider openai] [--repairs 1] [--no-check] [--dry-run]',
   '',
   'Generates one Remotion scene file under src/scenes/generated/SceneX.generated.tsx.',
 ].join('\n');
@@ -23,7 +24,6 @@ function parseArgs(argv) {
     sceneId: null,
     model: process.env.SCENE_AGENT_MODEL || null,
     provider: null,
-    cliCommand: process.env.SCENE_AGENT_CLI_COMMAND || null,
     repairs: DEFAULT_REPAIR_ATTEMPTS,
     check: true,
     dryRun: false,
@@ -35,8 +35,6 @@ function parseArgs(argv) {
       args.model = argv[++i];
     } else if (arg === '--provider') {
       args.provider = argv[++i];
-    } else if (arg === '--cli-command') {
-      args.cliCommand = argv[++i];
     } else if (arg === '--repairs') {
       args.repairs = Number(argv[++i]);
     } else if (arg === '--no-check') {
@@ -58,8 +56,8 @@ function parseArgs(argv) {
   if (!Number.isInteger(args.repairs) || args.repairs < 0 || args.repairs > 3) {
     throw new Error('--repairs must be an integer from 0 to 3');
   }
-  if (args.provider && !['openai', 'external-cli'].includes(args.provider)) {
-    throw new Error('--provider must be openai or external-cli');
+  if (args.provider && args.provider !== 'openai') {
+    throw new Error('--provider must be openai');
   }
   return args;
 }
@@ -197,16 +195,12 @@ async function getCodegenSettings(options = {}) {
     || process.env.SCENE_AGENT_PROVIDER
     || script.codegenProvider
     || 'openai';
-  const cliCommand = options.cliCommand
-    || process.env.SCENE_AGENT_CLI_COMMAND
-    || script.codegenCliCommand
-    || '';
 
-  if (!['openai', 'external-cli'].includes(provider)) {
+  if (provider !== 'openai') {
     throw new Error(`Unsupported codegen provider: ${provider}`);
   }
 
-  return {provider, cliCommand};
+  return {provider};
 }
 
 async function chat(messages, {model, temperature = 0.4} = {}) {
@@ -312,6 +306,7 @@ function looksLikeMojibake(text = '') {
 function buildFallbackBlueprint(context) {
   const scene = context.scene ?? {};
   const alignment = context.alignment ?? {};
+  const assets = Array.isArray(scene.assets) ? scene.assets : [];
   const colors = Array.isArray(scene.briefColors) && scene.briefColors.length > 0
     ? scene.briefColors.join(', ')
     : 'No explicit hex colors found.';
@@ -336,6 +331,16 @@ function buildFallbackBlueprint(context) {
     '',
     '# Must-Have Visual Elements',
     `Use specified colors: ${colors}.`,
+    assets.length
+      ? [
+        'User images:',
+        ...assets.map((asset) => {
+          const staticPath = asset.staticFilePath || toRemotionStaticFilePath(asset.file);
+          return `- ${asset.name} (${asset.role || 'both'}): ${asset.file} / staticFile("${staticPath}")${asset.notes ? ` - ${asset.notes}` : ''}`;
+        }),
+        'Use role=render images as visible Remotion material when appropriate. Use role=reference images only as effect/style/layout reference, not as visible layers. role=both may be used either way.',
+      ].join('\n')
+      : 'No user image assets or visual references were provided.',
     scene.tuningNotes || 'No fine-tuning notes provided.',
     '',
     '# Avoid Generic Layouts',
@@ -402,6 +407,15 @@ function validateGeneratedCode(code, context) {
   if (/\bfetch\s*\(|XMLHttpRequest|localStorage|sessionStorage|document\.|window\./.test(code)) {
     problems.push('Generated Remotion scene must not use network or browser globals');
   }
+  for (const asset of context.scene?.assets ?? []) {
+    if (asset.role === 'reference') {
+      const publicPath = String(asset.file || '').replace(/\\/g, '/');
+      const staticPath = asset.staticFilePath || toRemotionStaticFilePath(publicPath);
+      if (publicPath && (code.includes(publicPath) || code.includes(staticPath))) {
+        problems.push(`Reference-only image must not be rendered directly: ${asset.name || asset.id}`);
+      }
+    }
+  }
   if (/\.generated['"]|from\s+['"]\.\.\/generated/.test(code)) {
     problems.push('Generated scene must not import other generated scenes');
   }
@@ -460,6 +474,8 @@ function makeSystemPrompt() {
     'Before writing code, silently extract a brief-compliance checklist from scene.designNotes and scene.tuningNotes covering palette, subject elements, pacing beats, subtitle placement, and scene transitions.',
     'Treat the job as a fresh design pass. Do not preserve or imitate a previous generated layout unless it already matches the brief closely.',
     'If the brief names concrete visual elements such as silhouettes, circles, icons, charts, cards, interfaces, maps, or diagrams, render those as actual layers rather than collapsing them into one centered headline.',
+    'If user images are provided, respect their roles: role=render means a visible image asset available through assets[] and Img/staticFile; role=reference means style/effect/layout reference only and should not be automatically rendered; role=both can be used for either purpose.',
+    'When rendering image assets, type props with optional assets?: SceneAsset[], import SceneAsset from ../../types, derive the Remotion path with asset.file.replace(/^public[\\\\/]/, "").replace(/\\\\/g, "/"), and use <Img src={staticFile(path)} />. Never use native <img> or CSS background-image.',
     'If the brief specifies hex colors, reuse those colors or very close variants in the code.',
     'If the brief specifies subtitle placement, keep captions in that region unless the brief itself changes it.',
     'If the brief specifies pacing sections such as 0%-20%, 20%-50%, or cue-by-cue transitions, map those beats onto frame ranges and visible visual changes.',
@@ -550,98 +566,6 @@ function makeRepairPrompt(contextMarkdown, blueprint, code, validationError) {
   ].join('\n');
 }
 
-function quoteArg(value) {
-  return `"${String(value).replace(/"/g, '\\"')}"`;
-}
-
-function fillCommandTemplate(command, replacements) {
-  return command.replace(/\{([a-zA-Z][a-zA-Z0-9]*)\}/g, (match, key) => {
-    if (Object.hasOwn(replacements, key)) return replacements[key];
-    return match;
-  });
-}
-
-function makeExternalCliPrompt(basePrompt, {context, promptPath, outputPath, targetPath}) {
-  const rawTargetPath = path.relative(ROOT, targetPath).replace(/\\/g, '/');
-  const rawOutputPath = path.relative(ROOT, outputPath).replace(/\\/g, '/');
-  return [
-    'You are an external Remotion code generation CLI worker.',
-    `Write exactly one candidate TSX file: ${rawOutputPath}`,
-    `Do not edit ${rawTargetPath} directly. Do not edit any other file.`,
-    'The host process will validate the candidate and copy it to the target file if it passes.',
-    'If your CLI cannot write files, print exactly one complete TSX file to stdout.',
-    'Follow all constraints in the task below, especially the visual design brief, fine-tuning notes, skills, timestamped subtitle timeline, import rules, and runtime cue usage.',
-    '',
-    `Scene id: ${context.sceneId}`,
-    `Prompt file: ${path.relative(ROOT, promptPath).replace(/\\/g, '/')}`,
-    `Candidate output file: ${rawOutputPath}`,
-    `Final target file, host-managed: ${rawTargetPath}`,
-    '',
-    basePrompt,
-  ].join('\n');
-}
-
-async function runExternalSceneCli({command, prompt, context, attempt, targetPath, promptPath, outputPath, onLog}) {
-  if (!command?.trim()) {
-    throw new Error('Missing external codegen CLI command. Set script.codegenCliCommand or SCENE_AGENT_CLI_COMMAND.');
-  }
-
-  await fs.mkdir(CONTEXT_DIR, {recursive: true});
-  const externalPrompt = makeExternalCliPrompt(prompt, {context, promptPath, outputPath, targetPath});
-  await fs.writeFile(promptPath, externalPrompt.trimEnd() + '\n', 'utf-8');
-  await fs.rm(outputPath, {force: true}).catch(() => {});
-  logLine(onLog, `[scene-agent] Wrote external CLI prompt ${path.relative(ROOT, promptPath)}`);
-  logLine(onLog, `[scene-agent] External CLI candidate path ${path.relative(ROOT, outputPath)}`);
-
-  const rawTargetPath = path.relative(ROOT, targetPath).replace(/\\/g, '/');
-  const rawPromptPath = path.relative(ROOT, promptPath).replace(/\\/g, '/');
-  const rawOutputPath = path.relative(ROOT, outputPath).replace(/\\/g, '/');
-  const cliPrompt = [
-    `Read ${rawPromptPath}.`,
-    `Write the complete TSX candidate to ${rawOutputPath}.`,
-    `Do not edit ${rawTargetPath} or any other file.`,
-    'Return only a short completion note after writing the file.',
-  ].join(' ');
-  const commandText = fillCommandTemplate(command, {
-    sceneId: context.sceneId,
-    attempt: String(attempt),
-    prompt: quoteArg(cliPrompt),
-    promptRaw: cliPrompt,
-    promptFile: quoteArg(promptPath),
-    promptFileRaw: rawPromptPath,
-    contextFile: quoteArg(path.join(CONTEXT_DIR, `${context.sceneId}.codegen.md`)),
-    contextFileRaw: `.scene-codegen/${context.sceneId}.codegen.md`,
-    outputFile: quoteArg(outputPath),
-    outputFileRaw: rawOutputPath,
-    targetFile: quoteArg(targetPath),
-    targetFileRaw: rawTargetPath,
-  });
-
-  logLine(onLog, `[scene-agent] Running external CLI: ${commandText}`);
-  const result = await runShellCommand(commandText, {
-    stream: false,
-    stdin: command.includes('{promptFile}') || command.includes('{promptFileRaw}') ? null : prompt,
-  });
-  const stdoutPreview = result.stdout.trim().slice(-2000);
-  const stderrPreview = result.stderr.trim().slice(-2000);
-  if (stdoutPreview) logLine(onLog, `[scene-agent] External CLI stdout:\n${stdoutPreview}`);
-  if (stderrPreview) logLine(onLog, `[scene-agent] External CLI stderr:\n${stderrPreview}`);
-  if (!result.ok) {
-    throw new Error(`External codegen CLI failed (exit=${result.code}):\n${[result.stdout.trim(), result.stderr.trim()].filter(Boolean).join('\n').slice(-12000)}`);
-  }
-
-  const outputCode = await fs.readFile(outputPath, 'utf-8').catch(() => '');
-  if (outputCode.trim()) return extractCode(outputCode);
-
-  const stdout = result.stdout.trim();
-  if (stdout) return extractCode(stdout);
-
-  const targetCode = await fs.readFile(targetPath, 'utf-8').catch(() => '');
-  if (targetCode.trim()) return extractCode(targetCode);
-
-  throw new Error('External codegen CLI produced no TSX on stdout, outputFile, or targetFile.');
-}
-
 async function planSceneBlueprint(contextMarkdown, {model}) {
   return chat([
     {role: 'system', content: makeBlueprintSystemPrompt()},
@@ -665,40 +589,11 @@ async function repairScene(contextMarkdown, blueprint, code, validationError, {m
   return extractCode(response);
 }
 
-async function generateSceneWithExternalCli(contextMarkdown, blueprint, context, settings, paths, attempt, onLog) {
-  const prompt = makeInitialUserPrompt(contextMarkdown, blueprint);
-  return runExternalSceneCli({
-    command: settings.cliCommand,
-    prompt,
-    context,
-    attempt,
-    targetPath: paths.targetPath,
-    promptPath: paths.promptPath,
-    outputPath: paths.outputPath,
-    onLog,
-  });
-}
-
-async function repairSceneWithExternalCli(contextMarkdown, blueprint, code, validationError, context, settings, paths, attempt, onLog) {
-  const prompt = makeRepairPrompt(contextMarkdown, blueprint, code, validationError);
-  return runExternalSceneCli({
-    command: settings.cliCommand,
-    prompt,
-    context,
-    attempt,
-    targetPath: paths.targetPath,
-    promptPath: paths.promptPath,
-    outputPath: paths.outputPath,
-    onLog,
-  });
-}
-
 export async function runSceneAgent(options = {}) {
   const args = {
     sceneId: options.sceneId,
     model: options.model ?? process.env.SCENE_AGENT_MODEL ?? null,
     provider: options.provider ?? null,
-    cliCommand: options.cliCommand ?? process.env.SCENE_AGENT_CLI_COMMAND ?? null,
     repairs: options.repairs ?? DEFAULT_REPAIR_ATTEMPTS,
     check: options.check ?? true,
     dryRun: options.dryRun ?? false,
@@ -715,11 +610,6 @@ export async function runSceneAgent(options = {}) {
   const {markdown, json} = await buildContext(args.sceneId, {onLog: args.onLog});
   const targetPath = ensureAllowedTarget(json.targetFile, json.allowedWriteFiles);
   const previousCode = args.check ? await fs.readFile(targetPath, 'utf-8').catch(() => null) : null;
-  const externalPaths = {
-    targetPath,
-    promptPath: path.join(CONTEXT_DIR, `${args.sceneId}.codegen.external.md`),
-    outputPath: path.join(CONTEXT_DIR, `${args.sceneId}.codegen.external.candidate.tsx`),
-  };
 
   if (args.dryRun) {
     logLine(args.onLog, `[scene-agent] Dry run OK`);
@@ -751,9 +641,7 @@ export async function runSceneAgent(options = {}) {
   await fs.writeFile(blueprintPath, blueprint.trimEnd() + '\n', 'utf-8');
   logLine(args.onLog, `Wrote ${path.relative(ROOT, blueprintPath)}`);
 
-  let code = codegenSettings.provider === 'external-cli'
-    ? await generateSceneWithExternalCli(markdown, blueprint, json, codegenSettings, externalPaths, 0, args.onLog)
-    : await generateScene(markdown, blueprint, {model: args.model});
+  let code = await generateScene(markdown, blueprint, {model: args.model});
 
   try {
     for (let attempt = 0; attempt <= args.repairs; attempt += 1) {
@@ -784,9 +672,7 @@ export async function runSceneAgent(options = {}) {
           ? 'Local guards failed'
           : 'Validation failed';
         logLine(args.onLog, `[scene-agent] ${repairReason}, asking ${codegenSettings.provider} to repair (${attempt + 1}/${args.repairs})`);
-        code = codegenSettings.provider === 'external-cli'
-          ? await repairSceneWithExternalCli(markdown, blueprint, code, message, json, codegenSettings, externalPaths, attempt + 1, args.onLog)
-          : await repairScene(markdown, blueprint, code, message, {model: args.model});
+        code = await repairScene(markdown, blueprint, code, message, {model: args.model});
       }
     }
   } catch (error) {

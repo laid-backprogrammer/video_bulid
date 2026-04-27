@@ -3,1435 +3,683 @@
   "scenes": [
     {
       "id": "scene1",
-      "text": "最近很多人在聊 Agent。有人把它吹得很夸张，也有人逮着一切 Agent 方案一顿骂。但我自己做 AI 工具落地之后，越来越觉得一个更实际的问题是：\n很多人讨论 Agent 的时候，根本没把场景分清楚。\n把不同场景混在一起，讨论就一定失真。\n先问场景，再谈 Agent\n问题从来不只是 Agent 行不行。而是你到底在解决什么场景。",
-      "audioFile": "public/voiceover/scene1.1777172313801.mp3",
+      "text": "这是我新开发的一个日程管理工具",
+      "audioFile": "public/voiceover/scene1.1777294900380.mp3",
       "captionsFile": "public/captions/scene1.json",
-      "durationInFrames": 831,
+      "durationInFrames": 144,
       "cues": [
         {
           "id": "cue-1",
           "startFrame": 0,
-          "endFrame": 53,
-          "text": "最近很多人在聊 Agent",
+          "endFrame": 114,
+          "text": "这是我新开发的一个日程管理工具",
           "words": [
             {
-              "text": "最",
+              "text": "这是",
               "startFrame": 0,
-              "endFrame": 6
+              "endFrame": 16
             },
             {
-              "text": "近",
-              "startFrame": 6,
-              "endFrame": 13
+              "text": "我新",
+              "startFrame": 16,
+              "endFrame": 32
             },
             {
-              "text": "很",
-              "startFrame": 13,
-              "endFrame": 19
+              "text": "开发",
+              "startFrame": 32,
+              "endFrame": 48
             },
             {
-              "text": "多",
-              "startFrame": 19,
-              "endFrame": 26
+              "text": "的一",
+              "startFrame": 48,
+              "endFrame": 65
             },
             {
-              "text": "人",
-              "startFrame": 26,
-              "endFrame": 33
+              "text": "个日",
+              "startFrame": 65,
+              "endFrame": 81
             },
             {
-              "text": "在",
-              "startFrame": 33,
-              "endFrame": 39
+              "text": "程管",
+              "startFrame": 81,
+              "endFrame": 97
             },
             {
-              "text": "聊",
-              "startFrame": 39,
-              "endFrame": 46
+              "text": "理工具",
+              "startFrame": 97,
+              "endFrame": 114
+            }
+          ],
+          "emphasis": []
+        }
+      ],
+      "assets": [
+        {
+          "id": "asset_1777288834646_32dzeb",
+          "name": "开头.png",
+          "file": "public/assets/scenes/scene1/asset_1777288834646_32dzeb-asset.png",
+          "role": "reference",
+          "notes": "开头风格参考",
+          "mimeType": "image/png",
+          "size": 145014,
+          "uploadedAt": "2026-04-27T11:20:34.646Z"
+        },
+        {
+          "id": "asset_1777295027210_xzt4hp",
+          "name": "屏幕截图 2026-04-17 000238.png",
+          "file": "public/assets/scenes/scene1/asset_1777295027210_xzt4hp-2026-04-17-000238.png",
+          "role": "render",
+          "notes": "",
+          "mimeType": "image/png",
+          "size": 388065,
+          "uploadedAt": "2026-04-27T13:03:47.210Z"
+        }
+      ]
+    },
+    {
+      "id": "scene2",
+      "text": "最近不是很多人都在聊 Agent 嘛。\n\n有些人讲得特别夸张，好像什么都能用 Agent 解决；\n\n也有些人反过来，只要看到 Agent 方案就想吐槽。\n\n但我自己做了一阵子 AI 工具落地，感觉最关键的问题其实不是这个。\n\n而是很多人在聊 Agent 的时候，压根没先把场景分清楚。\n\n场景一旦没分清，后面就很容易全聊乱。\n\n明明不是一类问题，却放在一起讨论，最后得出来的结论当然也不靠谱。\n\n所以我现在会觉得，\n\n别急着争 Agent 到底有没有用。\n\n先问清楚：你要解决的到底是什么场景。\n\n这个问题不弄明白，后面的讨论基本都会跑偏。",
+      "audioFile": "public/voiceover/scene2.1777185317108.mp3",
+      "captionsFile": "public/captions/scene2.json",
+      "durationInFrames": 1191,
+      "cues": [
+        {
+          "id": "cue-1",
+          "startFrame": 0,
+          "endFrame": 84,
+          "text": "最近不是很多人都在聊 Agent 嘛",
+          "words": [
+            {
+              "text": "最近",
+              "startFrame": 0,
+              "endFrame": 14
+            },
+            {
+              "text": "不是",
+              "startFrame": 14,
+              "endFrame": 28
+            },
+            {
+              "text": "很多",
+              "startFrame": 28,
+              "endFrame": 42
+            },
+            {
+              "text": "人都在聊",
+              "startFrame": 42,
+              "endFrame": 56
             },
             {
               "text": "Agent",
-              "startFrame": 46,
-              "endFrame": 53
+              "startFrame": 56,
+              "endFrame": 70
+            },
+            {
+              "text": "嘛",
+              "startFrame": 70,
+              "endFrame": 84
             }
           ],
           "emphasis": []
         },
         {
           "id": "cue-2",
-          "startFrame": 53,
-          "endFrame": 113,
-          "text": "有人把它吹得很夸张",
+          "startFrame": 84,
+          "endFrame": 140,
+          "text": "有些人讲得特别夸张",
           "words": [
             {
-              "text": "有",
-              "startFrame": 53,
-              "endFrame": 59
+              "text": "有些",
+              "startFrame": 84,
+              "endFrame": 98
             },
             {
-              "text": "人",
-              "startFrame": 59,
-              "endFrame": 66
+              "text": "人讲",
+              "startFrame": 98,
+              "endFrame": 112
             },
             {
-              "text": "把",
-              "startFrame": 66,
-              "endFrame": 73
+              "text": "得特",
+              "startFrame": 112,
+              "endFrame": 126
             },
             {
-              "text": "它",
-              "startFrame": 73,
-              "endFrame": 79
-            },
-            {
-              "text": "吹",
-              "startFrame": 79,
-              "endFrame": 86
-            },
-            {
-              "text": "得",
-              "startFrame": 86,
-              "endFrame": 93
-            },
-            {
-              "text": "很",
-              "startFrame": 93,
-              "endFrame": 99
-            },
-            {
-              "text": "夸",
-              "startFrame": 99,
-              "endFrame": 106
-            },
-            {
-              "text": "张",
-              "startFrame": 106,
-              "endFrame": 113
+              "text": "别夸张",
+              "startFrame": 126,
+              "endFrame": 140
             }
           ],
           "emphasis": []
         },
         {
           "id": "cue-3",
-          "startFrame": 113,
-          "endFrame": 200,
-          "text": "也有人逮着一切 Agent 方案一顿骂",
+          "startFrame": 140,
+          "endFrame": 210,
+          "text": "好像什么都能用 Agent 解决",
           "words": [
             {
-              "text": "也",
-              "startFrame": 113,
-              "endFrame": 119
+              "text": "好像",
+              "startFrame": 140,
+              "endFrame": 154
             },
             {
-              "text": "有",
-              "startFrame": 119,
-              "endFrame": 126
+              "text": "什么",
+              "startFrame": 154,
+              "endFrame": 168
             },
             {
-              "text": "人",
-              "startFrame": 126,
-              "endFrame": 133
-            },
-            {
-              "text": "逮",
-              "startFrame": 133,
-              "endFrame": 139
-            },
-            {
-              "text": "着",
-              "startFrame": 139,
-              "endFrame": 146
-            },
-            {
-              "text": "一",
-              "startFrame": 146,
-              "endFrame": 153
-            },
-            {
-              "text": "切",
-              "startFrame": 153,
-              "endFrame": 159
+              "text": "都能用",
+              "startFrame": 168,
+              "endFrame": 182
             },
             {
               "text": "Agent",
-              "startFrame": 159,
-              "endFrame": 166
+              "startFrame": 182,
+              "endFrame": 196
             },
             {
-              "text": "方",
-              "startFrame": 166,
-              "endFrame": 173
-            },
-            {
-              "text": "案",
-              "startFrame": 173,
-              "endFrame": 179
-            },
-            {
-              "text": "一",
-              "startFrame": 179,
-              "endFrame": 186
-            },
-            {
-              "text": "顿",
-              "startFrame": 186,
-              "endFrame": 193
-            },
-            {
-              "text": "骂",
-              "startFrame": 193,
-              "endFrame": 200
+              "text": "解决",
+              "startFrame": 196,
+              "endFrame": 210
             }
           ],
           "emphasis": []
         },
         {
           "id": "cue-4",
-          "startFrame": 200,
-          "endFrame": 280,
-          "text": "但我自己做 AI 工具落地之后",
+          "startFrame": 210,
+          "endFrame": 252,
+          "text": "也有些人反过来",
           "words": [
             {
-              "text": "但",
-              "startFrame": 200,
-              "endFrame": 206
+              "text": "也有",
+              "startFrame": 210,
+              "endFrame": 224
             },
             {
-              "text": "我",
-              "startFrame": 206,
-              "endFrame": 213
+              "text": "些人",
+              "startFrame": 224,
+              "endFrame": 238
             },
             {
-              "text": "自",
-              "startFrame": 213,
-              "endFrame": 220
-            },
-            {
-              "text": "己",
-              "startFrame": 220,
-              "endFrame": 226
-            },
-            {
-              "text": "做",
-              "startFrame": 226,
-              "endFrame": 233
-            },
-            {
-              "text": "AI",
-              "startFrame": 233,
-              "endFrame": 240
-            },
-            {
-              "text": "工",
-              "startFrame": 240,
-              "endFrame": 246
-            },
-            {
-              "text": "具",
-              "startFrame": 246,
-              "endFrame": 253
-            },
-            {
-              "text": "落",
-              "startFrame": 253,
-              "endFrame": 260
-            },
-            {
-              "text": "地",
-              "startFrame": 260,
-              "endFrame": 266
-            },
-            {
-              "text": "之",
-              "startFrame": 266,
-              "endFrame": 273
-            },
-            {
-              "text": "后",
-              "startFrame": 273,
-              "endFrame": 280
+              "text": "反过来",
+              "startFrame": 238,
+              "endFrame": 252
             }
           ],
           "emphasis": []
         },
         {
           "id": "cue-5",
-          "startFrame": 280,
-          "endFrame": 373,
-          "text": "越来越觉得一个更实际的问题是：",
+          "startFrame": 252,
+          "endFrame": 308,
+          "text": "只要看到 Agent 方案就想吐槽",
           "words": [
             {
-              "text": "越",
+              "text": "只要看到",
+              "startFrame": 252,
+              "endFrame": 266
+            },
+            {
+              "text": "Agent",
+              "startFrame": 266,
+              "endFrame": 280
+            },
+            {
+              "text": "方案",
               "startFrame": 280,
-              "endFrame": 286
+              "endFrame": 294
             },
             {
-              "text": "来",
-              "startFrame": 286,
-              "endFrame": 293
-            },
-            {
-              "text": "越",
-              "startFrame": 293,
-              "endFrame": 299
-            },
-            {
-              "text": "觉",
-              "startFrame": 299,
-              "endFrame": 306
-            },
-            {
-              "text": "得",
-              "startFrame": 306,
-              "endFrame": 313
-            },
-            {
-              "text": "一",
-              "startFrame": 313,
-              "endFrame": 319
-            },
-            {
-              "text": "个",
-              "startFrame": 319,
-              "endFrame": 326
-            },
-            {
-              "text": "更",
-              "startFrame": 326,
-              "endFrame": 333
-            },
-            {
-              "text": "实",
-              "startFrame": 333,
-              "endFrame": 339
-            },
-            {
-              "text": "际",
-              "startFrame": 339,
-              "endFrame": 346
-            },
-            {
-              "text": "的",
-              "startFrame": 346,
-              "endFrame": 353
-            },
-            {
-              "text": "问",
-              "startFrame": 353,
-              "endFrame": 359
-            },
-            {
-              "text": "题",
-              "startFrame": 359,
-              "endFrame": 366
-            },
-            {
-              "text": "是",
-              "startFrame": 366,
-              "endFrame": 373
+              "text": "就想吐槽",
+              "startFrame": 294,
+              "endFrame": 308
             }
           ],
           "emphasis": []
         },
         {
           "id": "cue-6",
-          "startFrame": 373,
-          "endFrame": 433,
-          "text": "很多人讨论 Agent 的时候",
+          "startFrame": 308,
+          "endFrame": 392,
+          "text": "但我自己做了一阵子 AI 工具落地",
           "words": [
             {
-              "text": "很",
-              "startFrame": 373,
-              "endFrame": 379
+              "text": "但我",
+              "startFrame": 308,
+              "endFrame": 322
             },
             {
-              "text": "多",
-              "startFrame": 379,
-              "endFrame": 386
+              "text": "自己",
+              "startFrame": 322,
+              "endFrame": 336
             },
             {
-              "text": "人",
-              "startFrame": 386,
-              "endFrame": 393
+              "text": "做了",
+              "startFrame": 336,
+              "endFrame": 350
             },
             {
-              "text": "讨",
-              "startFrame": 393,
-              "endFrame": 399
+              "text": "一阵子",
+              "startFrame": 350,
+              "endFrame": 364
             },
             {
-              "text": "论",
-              "startFrame": 399,
-              "endFrame": 406
+              "text": "AI",
+              "startFrame": 364,
+              "endFrame": 378
             },
             {
-              "text": "Agent",
-              "startFrame": 406,
-              "endFrame": 413
-            },
-            {
-              "text": "的",
-              "startFrame": 413,
-              "endFrame": 419
-            },
-            {
-              "text": "时",
-              "startFrame": 419,
-              "endFrame": 426
-            },
-            {
-              "text": "候",
-              "startFrame": 426,
-              "endFrame": 433
+              "text": "工具落地",
+              "startFrame": 378,
+              "endFrame": 392
             }
           ],
           "emphasis": []
         },
         {
           "id": "cue-7",
-          "startFrame": 433,
-          "endFrame": 493,
-          "text": "根本没把场景分清楚",
+          "startFrame": 392,
+          "endFrame": 476,
+          "text": "感觉最关键的问题其实不是这个",
           "words": [
             {
-              "text": "根",
-              "startFrame": 433,
-              "endFrame": 439
+              "text": "感觉",
+              "startFrame": 392,
+              "endFrame": 406
             },
             {
-              "text": "本",
-              "startFrame": 439,
-              "endFrame": 446
+              "text": "最关",
+              "startFrame": 406,
+              "endFrame": 420
             },
             {
-              "text": "没",
-              "startFrame": 446,
-              "endFrame": 453
+              "text": "键的",
+              "startFrame": 420,
+              "endFrame": 434
             },
             {
-              "text": "把",
-              "startFrame": 453,
-              "endFrame": 459
+              "text": "问题",
+              "startFrame": 434,
+              "endFrame": 448
             },
             {
-              "text": "场",
-              "startFrame": 459,
-              "endFrame": 466
+              "text": "其实",
+              "startFrame": 448,
+              "endFrame": 462
             },
             {
-              "text": "景",
-              "startFrame": 466,
-              "endFrame": 473
-            },
-            {
-              "text": "分",
-              "startFrame": 473,
-              "endFrame": 479
-            },
-            {
-              "text": "清",
-              "startFrame": 479,
-              "endFrame": 486
-            },
-            {
-              "text": "楚",
-              "startFrame": 486,
-              "endFrame": 493
+              "text": "不是这个",
+              "startFrame": 462,
+              "endFrame": 476
             }
           ],
           "emphasis": []
         },
         {
           "id": "cue-8",
-          "startFrame": 493,
-          "endFrame": 553,
-          "text": "把不同场景混在一起",
+          "startFrame": 476,
+          "endFrame": 546,
+          "text": "而是很多人在聊 Agent 的时候",
           "words": [
             {
-              "text": "把",
-              "startFrame": 493,
-              "endFrame": 499
+              "text": "而是",
+              "startFrame": 476,
+              "endFrame": 490
             },
             {
-              "text": "不",
-              "startFrame": 499,
-              "endFrame": 506
+              "text": "很多",
+              "startFrame": 490,
+              "endFrame": 504
             },
             {
-              "text": "同",
-              "startFrame": 506,
-              "endFrame": 513
+              "text": "人在聊",
+              "startFrame": 504,
+              "endFrame": 518
             },
             {
-              "text": "场",
-              "startFrame": 513,
-              "endFrame": 519
+              "text": "Agent",
+              "startFrame": 518,
+              "endFrame": 532
             },
             {
-              "text": "景",
-              "startFrame": 519,
-              "endFrame": 526
-            },
-            {
-              "text": "混",
-              "startFrame": 526,
-              "endFrame": 533
-            },
-            {
-              "text": "在",
-              "startFrame": 533,
-              "endFrame": 539
-            },
-            {
-              "text": "一",
-              "startFrame": 539,
+              "text": "的时候",
+              "startFrame": 532,
               "endFrame": 546
-            },
-            {
-              "text": "起",
-              "startFrame": 546,
-              "endFrame": 553
             }
           ],
           "emphasis": []
         },
         {
           "id": "cue-9",
-          "startFrame": 553,
-          "endFrame": 600,
-          "text": "讨论就一定失真",
+          "startFrame": 546,
+          "endFrame": 602,
+          "text": "压根没先把场景分清楚",
           "words": [
             {
-              "text": "讨",
-              "startFrame": 553,
-              "endFrame": 559
+              "text": "压根",
+              "startFrame": 546,
+              "endFrame": 560
             },
             {
-              "text": "论",
-              "startFrame": 559,
-              "endFrame": 566
+              "text": "没先",
+              "startFrame": 560,
+              "endFrame": 574
             },
             {
-              "text": "就",
-              "startFrame": 566,
-              "endFrame": 573
+              "text": "把场",
+              "startFrame": 574,
+              "endFrame": 588
             },
             {
-              "text": "一",
-              "startFrame": 573,
-              "endFrame": 579
-            },
-            {
-              "text": "定",
-              "startFrame": 579,
-              "endFrame": 586
-            },
-            {
-              "text": "失",
-              "startFrame": 586,
-              "endFrame": 593
-            },
-            {
-              "text": "真",
-              "startFrame": 593,
-              "endFrame": 600
+              "text": "景分清楚",
+              "startFrame": 588,
+              "endFrame": 602
             }
           ],
           "emphasis": []
         },
         {
           "id": "cue-10",
-          "startFrame": 600,
-          "endFrame": 627,
-          "text": "先问场景",
+          "startFrame": 602,
+          "endFrame": 644,
+          "text": "场景一旦没分清",
           "words": [
             {
-              "text": "先",
-              "startFrame": 600,
-              "endFrame": 606
+              "text": "场景",
+              "startFrame": 602,
+              "endFrame": 616
             },
             {
-              "text": "问",
-              "startFrame": 606,
-              "endFrame": 613
+              "text": "一旦",
+              "startFrame": 616,
+              "endFrame": 630
             },
             {
-              "text": "场",
-              "startFrame": 613,
-              "endFrame": 620
-            },
-            {
-              "text": "景",
-              "startFrame": 620,
-              "endFrame": 627
+              "text": "没分清",
+              "startFrame": 630,
+              "endFrame": 644
             }
           ],
           "emphasis": []
         },
         {
           "id": "cue-11",
-          "startFrame": 627,
-          "endFrame": 647,
-          "text": "再谈 Agent",
+          "startFrame": 644,
+          "endFrame": 700,
+          "text": "后面就很容易全聊乱",
           "words": [
             {
-              "text": "再",
-              "startFrame": 627,
-              "endFrame": 633
+              "text": "后面",
+              "startFrame": 644,
+              "endFrame": 658
             },
             {
-              "text": "谈",
-              "startFrame": 633,
-              "endFrame": 640
+              "text": "就很",
+              "startFrame": 658,
+              "endFrame": 672
             },
             {
-              "text": "Agent",
-              "startFrame": 640,
-              "endFrame": 647
+              "text": "容易",
+              "startFrame": 672,
+              "endFrame": 686
+            },
+            {
+              "text": "全聊乱",
+              "startFrame": 686,
+              "endFrame": 700
             }
           ],
           "emphasis": []
         },
         {
           "id": "cue-12",
-          "startFrame": 647,
-          "endFrame": 720,
-          "text": "问题从来不只是 Agent 行不行",
+          "startFrame": 700,
+          "endFrame": 742,
+          "text": "明明不是一类问题",
           "words": [
             {
-              "text": "问",
-              "startFrame": 647,
-              "endFrame": 653
-            },
-            {
-              "text": "题",
-              "startFrame": 653,
-              "endFrame": 660
-            },
-            {
-              "text": "从",
-              "startFrame": 660,
-              "endFrame": 666
-            },
-            {
-              "text": "来",
-              "startFrame": 666,
-              "endFrame": 673
-            },
-            {
-              "text": "不",
-              "startFrame": 673,
-              "endFrame": 680
-            },
-            {
-              "text": "只",
-              "startFrame": 680,
-              "endFrame": 686
-            },
-            {
-              "text": "是",
-              "startFrame": 686,
-              "endFrame": 693
-            },
-            {
-              "text": "Agent",
-              "startFrame": 693,
-              "endFrame": 700
-            },
-            {
-              "text": "行",
+              "text": "明明",
               "startFrame": 700,
-              "endFrame": 706
+              "endFrame": 714
             },
             {
-              "text": "不",
-              "startFrame": 706,
-              "endFrame": 713
+              "text": "不是",
+              "startFrame": 714,
+              "endFrame": 728
             },
             {
-              "text": "行",
-              "startFrame": 713,
-              "endFrame": 720
+              "text": "一类问题",
+              "startFrame": 728,
+              "endFrame": 742
             }
           ],
           "emphasis": []
         },
         {
           "id": "cue-13",
-          "startFrame": 720,
-          "endFrame": 801,
-          "text": "而是你到底在解决什么场景",
+          "startFrame": 742,
+          "endFrame": 784,
+          "text": "却放在一起讨论",
           "words": [
             {
-              "text": "而",
-              "startFrame": 720,
-              "endFrame": 726
+              "text": "却放",
+              "startFrame": 742,
+              "endFrame": 756
             },
             {
-              "text": "是",
-              "startFrame": 726,
-              "endFrame": 733
+              "text": "在一",
+              "startFrame": 756,
+              "endFrame": 770
             },
             {
-              "text": "你",
-              "startFrame": 733,
-              "endFrame": 740
+              "text": "起讨论",
+              "startFrame": 770,
+              "endFrame": 784
+            }
+          ],
+          "emphasis": []
+        },
+        {
+          "id": "cue-14",
+          "startFrame": 784,
+          "endFrame": 868,
+          "text": "最后得出来的结论当然也不靠谱",
+          "words": [
+            {
+              "text": "最后",
+              "startFrame": 784,
+              "endFrame": 798
             },
             {
-              "text": "到",
-              "startFrame": 740,
-              "endFrame": 747
+              "text": "得出",
+              "startFrame": 798,
+              "endFrame": 812
             },
             {
-              "text": "底",
-              "startFrame": 747,
-              "endFrame": 753
+              "text": "来的",
+              "startFrame": 812,
+              "endFrame": 826
             },
             {
-              "text": "在",
-              "startFrame": 753,
-              "endFrame": 760
+              "text": "结论",
+              "startFrame": 826,
+              "endFrame": 840
             },
             {
-              "text": "解",
-              "startFrame": 760,
-              "endFrame": 767
+              "text": "当然",
+              "startFrame": 840,
+              "endFrame": 854
             },
             {
-              "text": "决",
-              "startFrame": 767,
-              "endFrame": 774
+              "text": "也不靠谱",
+              "startFrame": 854,
+              "endFrame": 868
+            }
+          ],
+          "emphasis": []
+        },
+        {
+          "id": "cue-15",
+          "startFrame": 868,
+          "endFrame": 910,
+          "text": "所以我现在会觉得",
+          "words": [
+            {
+              "text": "所以",
+              "startFrame": 868,
+              "endFrame": 882
             },
             {
-              "text": "什",
-              "startFrame": 774,
-              "endFrame": 780
+              "text": "我现",
+              "startFrame": 882,
+              "endFrame": 896
             },
             {
-              "text": "么",
-              "startFrame": 780,
-              "endFrame": 787
+              "text": "在会觉得",
+              "startFrame": 896,
+              "endFrame": 910
+            }
+          ],
+          "emphasis": []
+        },
+        {
+          "id": "cue-16",
+          "startFrame": 910,
+          "endFrame": 966,
+          "text": "别急着争 Agent 到底有没有用",
+          "words": [
+            {
+              "text": "别急着争",
+              "startFrame": 910,
+              "endFrame": 924
             },
             {
-              "text": "场",
-              "startFrame": 787,
-              "endFrame": 794
+              "text": "Agent",
+              "startFrame": 924,
+              "endFrame": 938
             },
             {
-              "text": "景",
-              "startFrame": 794,
-              "endFrame": 801
+              "text": "到底",
+              "startFrame": 938,
+              "endFrame": 952
+            },
+            {
+              "text": "有没有用",
+              "startFrame": 952,
+              "endFrame": 966
+            }
+          ],
+          "emphasis": []
+        },
+        {
+          "id": "cue-17",
+          "startFrame": 966,
+          "endFrame": 1050,
+          "text": "先问清楚：你要解决的到底是什么场景",
+          "words": [
+            {
+              "text": "先问清楚",
+              "startFrame": 966,
+              "endFrame": 980
+            },
+            {
+              "text": "你要",
+              "startFrame": 980,
+              "endFrame": 994
+            },
+            {
+              "text": "解决",
+              "startFrame": 994,
+              "endFrame": 1008
+            },
+            {
+              "text": "的到",
+              "startFrame": 1008,
+              "endFrame": 1022
+            },
+            {
+              "text": "底是",
+              "startFrame": 1022,
+              "endFrame": 1036
+            },
+            {
+              "text": "什么场景",
+              "startFrame": 1036,
+              "endFrame": 1050
+            }
+          ],
+          "emphasis": []
+        },
+        {
+          "id": "cue-18",
+          "startFrame": 1050,
+          "endFrame": 1092,
+          "text": "这个问题不弄明白",
+          "words": [
+            {
+              "text": "这个",
+              "startFrame": 1050,
+              "endFrame": 1064
+            },
+            {
+              "text": "问题",
+              "startFrame": 1064,
+              "endFrame": 1078
+            },
+            {
+              "text": "不弄明白",
+              "startFrame": 1078,
+              "endFrame": 1092
+            }
+          ],
+          "emphasis": []
+        },
+        {
+          "id": "cue-19",
+          "startFrame": 1092,
+          "endFrame": 1161,
+          "text": "后面的讨论基本都会跑偏",
+          "words": [
+            {
+              "text": "后面",
+              "startFrame": 1092,
+              "endFrame": 1105
+            },
+            {
+              "text": "的讨",
+              "startFrame": 1105,
+              "endFrame": 1119
+            },
+            {
+              "text": "论基",
+              "startFrame": 1119,
+              "endFrame": 1133
+            },
+            {
+              "text": "本都",
+              "startFrame": 1133,
+              "endFrame": 1147
+            },
+            {
+              "text": "会跑偏",
+              "startFrame": 1147,
+              "endFrame": 1161
             }
           ],
           "emphasis": []
         }
-      ]
-    },
-    {
-      "id": "scene2",
-      "text": "最近很多人在聊 Agent。有人把它吹得很夸张，也有人逮着一切 Agent 方案一顿骂。但我自己做 AI 工具落地之后，越来越觉得一个更实际的问题是： 很多人讨论 Agent 的时候，根本没把场景分清楚。 把不同场景混在一起，讨论就一定失真。 先问场景，再谈 Agent 问题从来不只是 Agent 行不行。而是你到底在解决什么场景。",
-      "audioFile": "public/voiceover/scene2.1777172368999.mp3",
-      "captionsFile": "public/captions/scene2.json",
-      "durationInFrames": 845,
-      "cues": [
+      ],
+      "assets": [
         {
-          "id": "cue-1",
-          "startFrame": 0,
-          "endFrame": 54,
-          "text": "最近很多人在聊 Agent",
-          "words": [
-            {
-              "text": "最",
-              "startFrame": 0,
-              "endFrame": 6
-            },
-            {
-              "text": "近",
-              "startFrame": 6,
-              "endFrame": 13
-            },
-            {
-              "text": "很",
-              "startFrame": 13,
-              "endFrame": 20
-            },
-            {
-              "text": "多",
-              "startFrame": 20,
-              "endFrame": 27
-            },
-            {
-              "text": "人",
-              "startFrame": 27,
-              "endFrame": 33
-            },
-            {
-              "text": "在",
-              "startFrame": 33,
-              "endFrame": 40
-            },
-            {
-              "text": "聊",
-              "startFrame": 40,
-              "endFrame": 47
-            },
-            {
-              "text": "Agent",
-              "startFrame": 47,
-              "endFrame": 54
-            }
-          ],
-          "emphasis": []
-        },
-        {
-          "id": "cue-2",
-          "startFrame": 54,
-          "endFrame": 115,
-          "text": "有人把它吹得很夸张",
-          "words": [
-            {
-              "text": "有",
-              "startFrame": 54,
-              "endFrame": 60
-            },
-            {
-              "text": "人",
-              "startFrame": 60,
-              "endFrame": 67
-            },
-            {
-              "text": "把",
-              "startFrame": 67,
-              "endFrame": 74
-            },
-            {
-              "text": "它",
-              "startFrame": 74,
-              "endFrame": 81
-            },
-            {
-              "text": "吹",
-              "startFrame": 81,
-              "endFrame": 87
-            },
-            {
-              "text": "得",
-              "startFrame": 87,
-              "endFrame": 94
-            },
-            {
-              "text": "很",
-              "startFrame": 94,
-              "endFrame": 101
-            },
-            {
-              "text": "夸",
-              "startFrame": 101,
-              "endFrame": 108
-            },
-            {
-              "text": "张",
-              "startFrame": 108,
-              "endFrame": 115
-            }
-          ],
-          "emphasis": []
-        },
-        {
-          "id": "cue-3",
-          "startFrame": 115,
-          "endFrame": 203,
-          "text": "也有人逮着一切 Agent 方案一顿骂",
-          "words": [
-            {
-              "text": "也",
-              "startFrame": 115,
-              "endFrame": 121
-            },
-            {
-              "text": "有",
-              "startFrame": 121,
-              "endFrame": 128
-            },
-            {
-              "text": "人",
-              "startFrame": 128,
-              "endFrame": 135
-            },
-            {
-              "text": "逮",
-              "startFrame": 135,
-              "endFrame": 142
-            },
-            {
-              "text": "着",
-              "startFrame": 142,
-              "endFrame": 148
-            },
-            {
-              "text": "一",
-              "startFrame": 148,
-              "endFrame": 155
-            },
-            {
-              "text": "切",
-              "startFrame": 155,
-              "endFrame": 162
-            },
-            {
-              "text": "Agent",
-              "startFrame": 162,
-              "endFrame": 169
-            },
-            {
-              "text": "方",
-              "startFrame": 169,
-              "endFrame": 175
-            },
-            {
-              "text": "案",
-              "startFrame": 175,
-              "endFrame": 182
-            },
-            {
-              "text": "一",
-              "startFrame": 182,
-              "endFrame": 189
-            },
-            {
-              "text": "顿",
-              "startFrame": 189,
-              "endFrame": 196
-            },
-            {
-              "text": "骂",
-              "startFrame": 196,
-              "endFrame": 203
-            }
-          ],
-          "emphasis": []
-        },
-        {
-          "id": "cue-4",
-          "startFrame": 203,
-          "endFrame": 285,
-          "text": "但我自己做 AI 工具落地之后",
-          "words": [
-            {
-              "text": "但",
-              "startFrame": 203,
-              "endFrame": 209
-            },
-            {
-              "text": "我",
-              "startFrame": 209,
-              "endFrame": 216
-            },
-            {
-              "text": "自",
-              "startFrame": 216,
-              "endFrame": 223
-            },
-            {
-              "text": "己",
-              "startFrame": 223,
-              "endFrame": 230
-            },
-            {
-              "text": "做",
-              "startFrame": 230,
-              "endFrame": 237
-            },
-            {
-              "text": "AI",
-              "startFrame": 237,
-              "endFrame": 244
-            },
-            {
-              "text": "工",
-              "startFrame": 244,
-              "endFrame": 250
-            },
-            {
-              "text": "具",
-              "startFrame": 250,
-              "endFrame": 257
-            },
-            {
-              "text": "落",
-              "startFrame": 257,
-              "endFrame": 264
-            },
-            {
-              "text": "地",
-              "startFrame": 264,
-              "endFrame": 271
-            },
-            {
-              "text": "之",
-              "startFrame": 271,
-              "endFrame": 278
-            },
-            {
-              "text": "后",
-              "startFrame": 278,
-              "endFrame": 285
-            }
-          ],
-          "emphasis": []
-        },
-        {
-          "id": "cue-5",
-          "startFrame": 285,
-          "endFrame": 441,
-          "text": "越来越觉得一个更实际的问题是： 很多人讨论 Agent 的时候",
-          "words": [
-            {
-              "text": "越",
-              "startFrame": 285,
-              "endFrame": 291
-            },
-            {
-              "text": "来",
-              "startFrame": 291,
-              "endFrame": 298
-            },
-            {
-              "text": "越",
-              "startFrame": 298,
-              "endFrame": 305
-            },
-            {
-              "text": "觉",
-              "startFrame": 305,
-              "endFrame": 312
-            },
-            {
-              "text": "得",
-              "startFrame": 312,
-              "endFrame": 318
-            },
-            {
-              "text": "一",
-              "startFrame": 318,
-              "endFrame": 325
-            },
-            {
-              "text": "个",
-              "startFrame": 325,
-              "endFrame": 332
-            },
-            {
-              "text": "更",
-              "startFrame": 332,
-              "endFrame": 339
-            },
-            {
-              "text": "实",
-              "startFrame": 339,
-              "endFrame": 346
-            },
-            {
-              "text": "际",
-              "startFrame": 346,
-              "endFrame": 352
-            },
-            {
-              "text": "的",
-              "startFrame": 352,
-              "endFrame": 359
-            },
-            {
-              "text": "问",
-              "startFrame": 359,
-              "endFrame": 366
-            },
-            {
-              "text": "题",
-              "startFrame": 366,
-              "endFrame": 373
-            },
-            {
-              "text": "是",
-              "startFrame": 373,
-              "endFrame": 379
-            },
-            {
-              "text": "很",
-              "startFrame": 379,
-              "endFrame": 386
-            },
-            {
-              "text": "多",
-              "startFrame": 386,
-              "endFrame": 393
-            },
-            {
-              "text": "人",
-              "startFrame": 393,
-              "endFrame": 400
-            },
-            {
-              "text": "讨",
-              "startFrame": 400,
-              "endFrame": 407
-            },
-            {
-              "text": "论",
-              "startFrame": 407,
-              "endFrame": 413
-            },
-            {
-              "text": "Agent",
-              "startFrame": 413,
-              "endFrame": 420
-            },
-            {
-              "text": "的",
-              "startFrame": 420,
-              "endFrame": 427
-            },
-            {
-              "text": "时",
-              "startFrame": 427,
-              "endFrame": 434
-            },
-            {
-              "text": "候",
-              "startFrame": 434,
-              "endFrame": 441
-            }
-          ],
-          "emphasis": []
-        },
-        {
-          "id": "cue-6",
-          "startFrame": 441,
-          "endFrame": 502,
-          "text": "根本没把场景分清楚",
-          "words": [
-            {
-              "text": "根",
-              "startFrame": 441,
-              "endFrame": 447
-            },
-            {
-              "text": "本",
-              "startFrame": 447,
-              "endFrame": 454
-            },
-            {
-              "text": "没",
-              "startFrame": 454,
-              "endFrame": 461
-            },
-            {
-              "text": "把",
-              "startFrame": 461,
-              "endFrame": 468
-            },
-            {
-              "text": "场",
-              "startFrame": 468,
-              "endFrame": 474
-            },
-            {
-              "text": "景",
-              "startFrame": 474,
-              "endFrame": 481
-            },
-            {
-              "text": "分",
-              "startFrame": 481,
-              "endFrame": 488
-            },
-            {
-              "text": "清",
-              "startFrame": 488,
-              "endFrame": 495
-            },
-            {
-              "text": "楚",
-              "startFrame": 495,
-              "endFrame": 502
-            }
-          ],
-          "emphasis": []
-        },
-        {
-          "id": "cue-7",
-          "startFrame": 502,
-          "endFrame": 563,
-          "text": "把不同场景混在一起",
-          "words": [
-            {
-              "text": "把",
-              "startFrame": 502,
-              "endFrame": 508
-            },
-            {
-              "text": "不",
-              "startFrame": 508,
-              "endFrame": 515
-            },
-            {
-              "text": "同",
-              "startFrame": 515,
-              "endFrame": 522
-            },
-            {
-              "text": "场",
-              "startFrame": 522,
-              "endFrame": 529
-            },
-            {
-              "text": "景",
-              "startFrame": 529,
-              "endFrame": 535
-            },
-            {
-              "text": "混",
-              "startFrame": 535,
-              "endFrame": 542
-            },
-            {
-              "text": "在",
-              "startFrame": 542,
-              "endFrame": 549
-            },
-            {
-              "text": "一",
-              "startFrame": 549,
-              "endFrame": 556
-            },
-            {
-              "text": "起",
-              "startFrame": 556,
-              "endFrame": 563
-            }
-          ],
-          "emphasis": []
-        },
-        {
-          "id": "cue-8",
-          "startFrame": 563,
-          "endFrame": 611,
-          "text": "讨论就一定失真",
-          "words": [
-            {
-              "text": "讨",
-              "startFrame": 563,
-              "endFrame": 569
-            },
-            {
-              "text": "论",
-              "startFrame": 569,
-              "endFrame": 576
-            },
-            {
-              "text": "就",
-              "startFrame": 576,
-              "endFrame": 583
-            },
-            {
-              "text": "一",
-              "startFrame": 583,
-              "endFrame": 590
-            },
-            {
-              "text": "定",
-              "startFrame": 590,
-              "endFrame": 597
-            },
-            {
-              "text": "失",
-              "startFrame": 597,
-              "endFrame": 604
-            },
-            {
-              "text": "真",
-              "startFrame": 604,
-              "endFrame": 611
-            }
-          ],
-          "emphasis": []
-        },
-        {
-          "id": "cue-9",
-          "startFrame": 611,
-          "endFrame": 638,
-          "text": "先问场景",
-          "words": [
-            {
-              "text": "先",
-              "startFrame": 611,
-              "endFrame": 617
-            },
-            {
-              "text": "问",
-              "startFrame": 617,
-              "endFrame": 624
-            },
-            {
-              "text": "场",
-              "startFrame": 624,
-              "endFrame": 631
-            },
-            {
-              "text": "景",
-              "startFrame": 631,
-              "endFrame": 638
-            }
-          ],
-          "emphasis": []
-        },
-        {
-          "id": "cue-10",
-          "startFrame": 638,
-          "endFrame": 733,
-          "text": "再谈 Agent 问题从来不只是 Agent 行不行",
-          "words": [
-            {
-              "text": "再",
-              "startFrame": 638,
-              "endFrame": 644
-            },
-            {
-              "text": "谈",
-              "startFrame": 644,
-              "endFrame": 651
-            },
-            {
-              "text": "Agent",
-              "startFrame": 651,
-              "endFrame": 658
-            },
-            {
-              "text": "问",
-              "startFrame": 658,
-              "endFrame": 665
-            },
-            {
-              "text": "题",
-              "startFrame": 665,
-              "endFrame": 671
-            },
-            {
-              "text": "从",
-              "startFrame": 671,
-              "endFrame": 678
-            },
-            {
-              "text": "来",
-              "startFrame": 678,
-              "endFrame": 685
-            },
-            {
-              "text": "不",
-              "startFrame": 685,
-              "endFrame": 692
-            },
-            {
-              "text": "只",
-              "startFrame": 692,
-              "endFrame": 699
-            },
-            {
-              "text": "是",
-              "startFrame": 699,
-              "endFrame": 705
-            },
-            {
-              "text": "Agent",
-              "startFrame": 705,
-              "endFrame": 712
-            },
-            {
-              "text": "行",
-              "startFrame": 712,
-              "endFrame": 719
-            },
-            {
-              "text": "不",
-              "startFrame": 719,
-              "endFrame": 726
-            },
-            {
-              "text": "行",
-              "startFrame": 726,
-              "endFrame": 733
-            }
-          ],
-          "emphasis": []
-        },
-        {
-          "id": "cue-11",
-          "startFrame": 733,
-          "endFrame": 815,
-          "text": "而是你到底在解决什么场景",
-          "words": [
-            {
-              "text": "而",
-              "startFrame": 733,
-              "endFrame": 739
-            },
-            {
-              "text": "是",
-              "startFrame": 739,
-              "endFrame": 746
-            },
-            {
-              "text": "你",
-              "startFrame": 746,
-              "endFrame": 753
-            },
-            {
-              "text": "到",
-              "startFrame": 753,
-              "endFrame": 760
-            },
-            {
-              "text": "底",
-              "startFrame": 760,
-              "endFrame": 767
-            },
-            {
-              "text": "在",
-              "startFrame": 767,
-              "endFrame": 774
-            },
-            {
-              "text": "解",
-              "startFrame": 774,
-              "endFrame": 780
-            },
-            {
-              "text": "决",
-              "startFrame": 780,
-              "endFrame": 787
-            },
-            {
-              "text": "什",
-              "startFrame": 787,
-              "endFrame": 794
-            },
-            {
-              "text": "么",
-              "startFrame": 794,
-              "endFrame": 801
-            },
-            {
-              "text": "场",
-              "startFrame": 801,
-              "endFrame": 808
-            },
-            {
-              "text": "景",
-              "startFrame": 808,
-              "endFrame": 815
-            }
-          ],
-          "emphasis": []
+          "id": "asset_1777294857164_0ejr2r",
+          "name": "屏幕截图 2026-04-17 000238.png",
+          "file": "public/assets/scenes/scene2/asset_1777294857164_0ejr2r-2026-04-17-000238.png",
+          "role": "render",
+          "notes": "整体页面展示",
+          "mimeType": "image/png",
+          "size": 388065,
+          "uploadedAt": "2026-04-27T13:00:57.164Z"
         }
       ]
     },
@@ -1590,7 +838,8 @@
           ],
           "emphasis": []
         }
-      ]
+      ],
+      "assets": []
     },
     {
       "id": "scene4",
@@ -1678,7 +927,8 @@
           ],
           "emphasis": []
         }
-      ]
+      ],
+      "assets": []
     },
     {
       "id": "scene5",
@@ -1795,7 +1045,8 @@
           ],
           "emphasis": []
         }
-      ]
+      ],
+      "assets": []
     },
     {
       "id": "scene6",
@@ -1902,7 +1153,8 @@
           ],
           "emphasis": []
         }
-      ]
+      ],
+      "assets": []
     },
     {
       "id": "scene7",
@@ -1964,7 +1216,8 @@
           ],
           "emphasis": []
         }
-      ]
+      ],
+      "assets": []
     },
     {
       "id": "scene8",
@@ -2106,7 +1359,8 @@
           ],
           "emphasis": []
         }
-      ]
+      ],
+      "assets": []
     }
   ]
 }

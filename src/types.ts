@@ -13,6 +13,17 @@ export type SegmentCue = {
   rawWords?: WordCue[];
 };
 
+export type SceneAsset = {
+  id: string;
+  name: string;
+  file: string;
+  role?: 'render' | 'reference' | 'both' | string;
+  notes?: string;
+  mimeType?: string;
+  size?: number;
+  uploadedAt?: string;
+};
+
 export type SceneData = {
   id: string;
   text: string;
@@ -20,6 +31,7 @@ export type SceneData = {
   captionsFile: string;
   durationInFrames: number;
   cues: SegmentCue[];
+  assets?: SceneAsset[];
 };
 
 export type AgentDiscussionProps = {

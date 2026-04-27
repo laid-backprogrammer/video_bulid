@@ -1,4 +1,29 @@
 import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import {formatDuration, getErrorMessage, renderPhaseLabel, STEP_META, STUDIO_URL} from './app/workflow';
+import {TuneCodegenDialog} from './components/TuneCodegenDialog';
+import {Panel} from './components/ui/Panel';
+import {Shell} from './components/ui/Shell';
+import {CaptionTimeline} from './features/audio/CaptionTimeline';
+import {DesignDialog} from './features/design/DesignDialog';
+import {SceneList} from './features/scenes/SceneList';
+import {SceneAssetsPanel} from './features/scenes/SceneAssetsPanel';
+import {WorkflowActions} from './features/workflow/WorkflowActions';
+import {WorkflowStepper} from './features/workflow/WorkflowStepper';
+import {fetchJson, postJson, postSse} from './services/api/client';
+import type {
+  BusyAction,
+  CodegenStatus,
+  Config,
+  ModalType,
+  PipelineStatus,
+  RenderStatus,
+  SceneAsset,
+  SceneAssetRole,
+  SceneItem,
+  ScriptScene,
+  TtsStatus,
+  WorkflowStep,
+} from './types';
 
 /* ---------- Error Boundary ---------- */
 class ErrorBoundary extends React.Component<{children: React.ReactNode}, {hasError: boolean; error?: Error}> {
@@ -26,250 +51,6 @@ class ErrorBoundary extends React.Component<{children: React.ReactNode}, {hasErr
   }
 }
 
-const API_BASE = '';
-const STUDIO_URL = 'http://localhost:3000';
-
-type ScriptScene = {
-  id: string;
-  text: string;
-  tuningNotes?: string;
-  designNotes?: string;
-};
-
-type SceneItem = ScriptScene & {
-  audioExists: boolean;
-  captionExists: boolean;
-  durationMs: number | null;
-  audioUrl: string | null;
-  captionsUrl: string | null;
-};
-
-type Config = {
-  fps: number;
-  ttsBaseUrl: string;
-  ttsSign: string;
-  ttsAudioId: string;
-  ttsSpeed: number;
-  ttsStyle?: string;
-  ttsGenre?: number;
-  ttsVoiceName?: string;
-  ttsVoiceDescribe?: string;
-  transcribeBaseUrl: string;
-  transcribeModel: string;
-  transcribeApiKey: string;
-  llmBaseUrl?: string;
-  llmModel?: string;
-  llmApiKey?: string;
-  codegenProvider?: 'openai' | 'external-cli' | string;
-  codegenCliCommand?: string;
-  scenes: ScriptScene[];
-};
-
-type PipelineStatus = {
-  running: boolean;
-  scenes: Array<{id: string; step: string; status: string; error: string | null}>;
-};
-
-type RenderProgress = {
-  rendered: number;
-  total: number | null;
-  encoded: number;
-  percent: number;
-  phase: string;
-} | null;
-
-type RenderStatus = {
-  running: boolean;
-  exitCode: number | null;
-  startTime: number | null;
-  endTime: number | null;
-  outputFile: string;
-  mode: 'full' | 'scene';
-  sceneId: string | null;
-  progress: RenderProgress;
-  logs: string[];
-  error: string | null;
-  videoUrl: string | null;
-  videoExists: boolean;
-};
-
-type WorkflowStep = 'script' | 'audio' | 'design' | 'preview' | 'render';
-
-type TtsStatus = {
-  running: boolean;
-  mode: 'scene' | 'all' | null;
-  sceneId: string | null;
-  currentSceneId: string | null;
-  currentIndex: number;
-  total: number;
-  done: number;
-  step: string;
-  message: string;
-  taskId: string | null;
-  providerStatus: string | number | null;
-  outputFile: string | null;
-  startedAt: number | null;
-  endTime: number | null;
-  error: string | null;
-  logs: string[];
-};
-
-type CodegenStatus = {
-  running: boolean;
-  sceneId: string | null;
-  step: string;
-  message: string;
-  startTime: number | null;
-  endTime: number | null;
-  targetFile: string | null;
-  error: string | null;
-  result: {sceneId?: string; targetFile?: string; checked?: boolean; dryRun?: boolean} | null;
-  logs: string[];
-};
-
-type LlmStreamFields = {
-  streamLogs?: string[];
-  thinking?: string;
-  provider?: string;
-  error?: string;
-};
-
-type ModalType =
-  | ({kind: 'tune'; sceneId: string; prompt: string; result: string; loading: boolean} & LlmStreamFields)
-  | ({kind: 'design'; sceneId: string; loading: boolean; result?: string} & LlmStreamFields)
-  | null;
-
-type BusyAction = string | null;
-
-/* ---------- utils ---------- */
-
-const fetchJson = async <T,>(url: string, opts?: RequestInit): Promise<T> => {
-  const res = await fetch(`${API_BASE}${url}`, opts);
-  const text = await res.text();
-  let data: any = null;
-  if (text) {
-    try {
-      data = JSON.parse(text);
-    } catch {
-      const preview = text.replace(/\s+/g, ' ').slice(0, 180);
-      throw new Error(`接口 ${url} 返回的不是 JSON：${preview}`);
-    }
-  }
-  if (!res.ok) {
-    throw new Error(data?.error || data?.message || text || `${res.status} ${res.statusText}`);
-  }
-  return data as T;
-};
-
-const postJson = <T,>(url: string, body: unknown = {}) =>
-  fetchJson<T>(url, {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(body),
-  });
-
-type SseHandlers = {
-  status?: (payload: any) => void;
-  thinking?: (payload: any) => void;
-  token?: (payload: any) => void;
-  done?: (payload: any) => void;
-  error?: (payload: any) => void;
-};
-
-const postSse = async (url: string, body: unknown, handlers: SseHandlers) => {
-  const res = await fetch(`${API_BASE}${url}`, {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(body),
-  });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text || res.statusText);
-  }
-  if (!res.body) throw new Error('浏览器不支持流式响应');
-
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let eventName = 'message';
-  let dataLines: string[] = [];
-
-  const dispatch = () => {
-    if (!dataLines.length) {
-      eventName = 'message';
-      return;
-    }
-    const payloadText = dataLines.join('\n');
-    dataLines = [];
-    const payload = payloadText ? JSON.parse(payloadText) : {};
-    if (eventName === 'error') {
-      handlers.error?.(payload);
-      throw new Error(payload.error || 'SSE stream failed');
-    }
-    handlers[eventName as keyof SseHandlers]?.(payload);
-    eventName = 'message';
-  };
-
-  while (true) {
-    const {done, value} = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, {stream: true});
-    const lines = buffer.split(/\r?\n/);
-    buffer = lines.pop() ?? '';
-    for (const line of lines) {
-      if (!line) {
-        dispatch();
-      } else if (line.startsWith('event:')) {
-        eventName = line.slice(6).trim();
-      } else if (line.startsWith('data:')) {
-        dataLines.push(line.slice(5).trimStart());
-      }
-    }
-  }
-  if (buffer.trim()) {
-    if (buffer.startsWith('data:')) dataLines.push(buffer.slice(5).trimStart());
-    dispatch();
-  }
-};
-
-const formatDuration = (ms: number | null) => {
-  if (!ms) return '未生成';
-  return `${(ms / 1000).toFixed(1)}s`;
-};
-
-const STEP_ORDER: WorkflowStep[] = ['script', 'audio', 'design', 'preview', 'render'];
-
-const STEP_META: Record<WorkflowStep, {label: string; desc: string}> = {
-  script: {label: '1. 文案', desc: '编辑每段文案'},
-  audio: {label: '2. 语音', desc: 'TTS 生成与时间轴对齐'},
-  design: {label: '3. 设计', desc: 'LLM 分析画面方案'},
-  preview: {label: '4. 预览', desc: '单段渲染与微调'},
-  render: {label: '5. 导出', desc: '渲染完整视频'},
-};
-
-const getSceneProgress = (scene: SceneItem) => {
-  let completed = 0;
-  if (scene.text.trim()) completed++;
-  if (scene.audioExists) completed++;
-  if (scene.captionExists) completed++;
-  if (scene.designNotes?.trim()) completed++;
-  if (scene.tuningNotes?.trim()) completed++;
-  return completed;
-};
-
-const renderPhaseLabel: Record<string, string> = {
-  starting: '准备中',
-  bundling: '打包中',
-  metadata: '读取合成信息',
-  rendering: '渲染帧',
-  encoding: '编码视频',
-  done: '完成',
-  failed: '失败',
-};
-
-const getErrorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error));
-
 /* ---------- components ---------- */
 
 export default function App() {
@@ -290,6 +71,11 @@ export default function App() {
   const [cloneName, setCloneName] = useState('');
   const [cloneDescribe, setCloneDescribe] = useState('');
   const [cloneLoading, setCloneLoading] = useState(false);
+  const [assetFile, setAssetFile] = useState<File | null>(null);
+  const [assetRole, setAssetRole] = useState<SceneAssetRole>('reference');
+  const [assetNotes, setAssetNotes] = useState('');
+  const [assetLoading, setAssetLoading] = useState(false);
+  const [tuneDialogOpen, setTuneDialogOpen] = useState(false);
   const logsRef = useRef<HTMLDivElement>(null);
   const renderPollErrorRef = useRef<string | null>(null);
   const ttsPollErrorRef = useRef<string | null>(null);
@@ -380,6 +166,7 @@ export default function App() {
     setCodegen((current) => ({
       running: false,
       sceneId: current?.sceneId ?? null,
+      provider: current?.provider ?? null,
       step: 'failed',
       message: 'Remotion 代码生成状态刷新失败',
       startTime: current?.startTime ?? null,
@@ -391,7 +178,7 @@ export default function App() {
     }));
   }, [pushLog]);
 
-  const appendModalLog = useCallback((kind: 'tune' | 'design', sceneId: string, line: string) => {
+  const appendModalLog = useCallback((kind: 'design', sceneId: string, line: string) => {
     setModal((current) => {
       if (!current || current.kind !== kind || current.sceneId !== sceneId) return current;
       return {
@@ -401,7 +188,7 @@ export default function App() {
     });
   }, []);
 
-  const patchModal = useCallback((kind: 'tune' | 'design', sceneId: string, patch: Partial<Exclude<ModalType, null>>) => {
+  const patchModal = useCallback((kind: 'design', sceneId: string, patch: Partial<Exclude<ModalType, null>>) => {
     setModal((current) => {
       if (!current || current.kind !== kind || current.sceneId !== sceneId) return current;
       return {...current, ...patch} as ModalType;
@@ -570,7 +357,6 @@ export default function App() {
 
   const updateSceneText = (sceneId: string, text: string) => updateSceneField(sceneId, 'text', text);
   const updateSceneDesign = (sceneId: string, notes: string) => updateSceneField(sceneId, 'designNotes', notes);
-  const updateSceneTune = (sceneId: string, notes: string) => updateSceneField(sceneId, 'tuningNotes', notes);
 
   const runTts = (sceneId: string, force = false) =>
     runAction(`${force ? '重新生成' : '生成'}语音 ${sceneId}`, async () => {
@@ -605,6 +391,40 @@ export default function App() {
     }
   };
 
+  const uploadSceneAsset = async (sceneId: string) => {
+    if (!assetFile) return;
+    setAssetLoading(true);
+    pushLog(`开始上传 ${sceneId} 图片：${assetFile.name}`);
+    try {
+      const form = new FormData();
+      form.append('sceneId', sceneId);
+      form.append('role', assetRole);
+      form.append('notes', assetNotes.trim());
+      form.append('file', assetFile);
+      const data = await fetchJson<{config: Config; asset?: SceneAsset}>('/api/scene/assets', {
+        method: 'POST',
+        body: form,
+      });
+      setConfig(data.config);
+      setAssetFile(null);
+      setAssetNotes('');
+      await refresh();
+      pushLog(`${sceneId} 图片已上传为 ${assetRole}：${data.asset?.name ?? assetFile.name}`);
+    } catch (error) {
+      pushLog(`图片上传失败：${getErrorMessage(error)}`);
+    } finally {
+      setAssetLoading(false);
+    }
+  };
+
+  const deleteSceneAsset = (sceneId: string, assetId: string) =>
+    runAction(`删除图片 ${assetId}`, async () => {
+      const result = await postJson<{config: Config}>('/api/scene/assets/delete', {sceneId, assetId});
+      setConfig(result.config);
+      await refresh();
+      pushLog(`${sceneId} 图片已删除`);
+    });
+
   const runAsr = (sceneId: string, force = false) =>
     runAction(`${force ? '重做' : '生成'}时间轴对齐 ${sceneId}`, async () => {
       const result = await postJson<{result?: {cues?: Array<{words?: unknown[]}>}}>('/api/asr', {sceneId, force});
@@ -619,7 +439,12 @@ export default function App() {
         await postJson('/api/config', config);
         pushLog('已自动保存当前脚本和画面描述');
       }
-      await postJson('/api/scene/codegen', {sceneId, repairs: 2, check: true});
+      await postJson('/api/scene/codegen', {
+        sceneId,
+        provider: 'openai',
+        repairs: 2,
+        check: true,
+      });
       const status = await fetchJson<CodegenStatus>('/api/scene/codegen/status');
       setCodegen(status);
       pushLog(`${sceneId} 已启动 Remotion 代码生成`);
@@ -667,62 +492,6 @@ export default function App() {
       setStep('preview');
     });
 
-  /* ---------- LLM tune ---------- */
-  const requestTune = async () => {
-    if (!modal || modal.kind !== 'tune' || !config) return;
-    const scene = config.scenes.find((item) => item.id === modal.sceneId);
-    if (!scene) return;
-    const sceneId = modal.sceneId;
-    const prompt = modal.prompt;
-    let finalText = '';
-    setModal({
-      ...modal,
-      loading: true,
-      result: '',
-      thinking: '',
-      error: undefined,
-      streamLogs: [`[${new Date().toLocaleTimeString()}] 连接 LLM SSE 流...`],
-    });
-    try {
-      await postSse('/api/scene/tune/stream', {
-        sceneId,
-        text: scene.text,
-        prompt,
-        currentNotes: scene.tuningNotes ?? '',
-      }, {
-        status: (payload) => {
-          patchModal('tune', sceneId, {provider: payload.provider});
-          appendModalLog('tune', sceneId, payload.message || 'LLM 已连接');
-        },
-        thinking: (payload) => {
-          patchModal('tune', sceneId, {thinking: payload.text ?? ''});
-        },
-        token: (payload) => {
-          finalText = payload.text ?? finalText;
-          patchModal('tune', sceneId, {result: finalText});
-        },
-        done: (payload) => {
-          finalText = payload.text ?? finalText;
-          patchModal('tune', sceneId, {loading: false, result: finalText, provider: payload.provider});
-          appendModalLog('tune', sceneId, 'LLM 回复完成');
-        },
-        error: (payload) => {
-          patchModal('tune', sceneId, {error: payload.error, loading: false});
-        },
-      });
-    } catch (error: any) {
-      patchModal('tune', sceneId, {loading: false, error: error.message || String(error)});
-      appendModalLog('tune', sceneId, `LLM 请求失败：${error.message || error}`);
-    }
-  };
-
-  const applyTuneResult = () => {
-    if (!modal || modal.kind !== 'tune') return;
-    updateSceneTune(modal.sceneId, modal.result);
-    pushLog(`${modal.sceneId} 已应用 LLM 微调建议到备注，保存脚本后生效`);
-    setModal(null);
-  };
-
   /* ---------- LLM design ---------- */
   const requestDesign = async () => {
     if (!modal || modal.kind !== 'design' || !config) return;
@@ -730,6 +499,7 @@ export default function App() {
     const liveScene = scenes.find((item) => item.id === modal.sceneId);
     if (!scene) return;
     const sceneId = modal.sceneId;
+    const prompt = modal.prompt.trim();
     let finalText = '';
     setModal({
       ...modal,
@@ -740,10 +510,17 @@ export default function App() {
       streamLogs: [`[${new Date().toLocaleTimeString()}] 连接 LLM SSE 流...`],
     });
     try {
+      if (assetFile) {
+        appendModalLog('design', sceneId, `上传图片：${assetFile.name} · ${assetRole}`);
+        await uploadSceneAsset(sceneId);
+        appendModalLog('design', sceneId, '图片已写入场景素材上下文');
+      }
       await postSse('/api/scene/design/stream', {
         sceneId,
         text: scene.text,
         durationMs: liveScene?.durationMs ?? null,
+        prompt,
+        currentDesignNotes: scene.designNotes ?? '',
       }, {
         status: (payload) => {
           patchModal('design', sceneId, {provider: payload.provider});
@@ -775,7 +552,7 @@ export default function App() {
   };
 
   /* ---------- status ---------- */
-  const anyRunning = Boolean(busy || pipeline?.running || render?.running || ttsStatus?.running || codegen?.running || modal?.loading || cloneLoading);
+  const anyRunning = Boolean(busy || pipeline?.running || render?.running || ttsStatus?.running || codegen?.running || modal?.loading || cloneLoading || assetLoading);
   const ttsPercent = ttsStatus?.total
     ? Math.round((ttsStatus.done / ttsStatus.total) * 100)
     : ttsStatus?.running
@@ -787,10 +564,6 @@ export default function App() {
     : ttsStatus?.error
       ? `失败：${ttsStatus.error}`
       : ttsStatus?.message ?? '未开始';
-  const isTtsActiveForScene = (sceneId: string) =>
-    Boolean(ttsStatus?.running && (ttsStatus.mode === 'all' || ttsStatus.currentSceneId === sceneId || ttsStatus.sceneId === sceneId));
-  const isCodegenActiveForScene = (sceneId: string) => Boolean(codegen?.running && codegen.sceneId === sceneId);
-
   const progress = render?.progress;
   const progressText = progress
     ? `${renderPhaseLabel[progress.phase] ?? progress.phase} · ${progress.percent}%${progress.total ? ` (${progress.rendered}/${progress.total})` : ''}`
@@ -809,7 +582,6 @@ export default function App() {
             ? '流水线运行中'
             : null;
   const statusProblem = ttsStatus?.error || codegen?.error || render?.error || null;
-
   const completedScenes = scenes.filter((s) => s.audioExists && s.captionExists).length;
   const totalScenes = scenes.length;
 
@@ -836,16 +608,6 @@ export default function App() {
               </p>
             </div>
             <div style={{display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end'}}>
-              <select
-                aria-label="Codegen provider"
-                value={config.codegenProvider ?? 'openai'}
-                onChange={(e) => updateConfigField('codegenProvider', e.target.value)}
-                style={providerSelectStyle}
-                disabled={anyRunning}
-              >
-                <option value="openai">OpenAI</option>
-                <option value="external-cli">External CLI</option>
-              </select>
               <input
                 aria-label="LLM model"
                 value={config.llmModel ?? ''}
@@ -854,108 +616,33 @@ export default function App() {
                 style={modelInputStyle}
                 disabled={anyRunning}
               />
-              {config.codegenProvider === 'external-cli' ? (
-                <input
-                  aria-label="Codegen CLI command"
-                  value={config.codegenCliCommand ?? ''}
-                  onChange={(e) => updateConfigField('codegenCliCommand', e.target.value)}
-                  placeholder="kimi --print --final-message-only --prompt {prompt}"
-                  style={cliCommandInputStyle}
-                  disabled={anyRunning}
-                />
-              ) : null}
               <button type="button" style={buttonStyle('#8be9fd', anyRunning)} onClick={saveConfig} disabled={anyRunning}>
                 保存脚本
               </button>
             </div>
           </header>
 
-          {/* Stepper */}
-          <div style={stepperStyle}>
-            {STEP_ORDER.map((s) => {
-              const active = step === s;
-              const clickable =
-                s === 'script'
-                  ? true
-                  : s === 'audio'
-                    ? completedScenes > 0 || scenes.some((sc) => sc.audioExists)
-                    : s === 'design'
-                      ? scenes.some((sc) => sc.captionExists)
-                      : s === 'preview'
-                        ? scenes.some((sc) => sc.captionExists)
-                        : s === 'render'
-                          ? completedScenes === totalScenes && totalScenes > 0
-                          : true;
-              return (
-                <button
-                  type="button"
-                  key={s}
-                  style={stepButtonStyle(active, clickable)}
-                  onClick={() => clickable && setStep(s)}
-                  disabled={!clickable}
-                >
-                  <span style={stepDotStyle(active)} />
-                  <span style={{display: 'block'}}>
-                    <span style={{display: 'block', fontWeight: 700, fontSize: 13}}>{STEP_META[s].label}</span>
-                    <span style={{display: 'block', fontSize: 11, opacity: 0.7, marginTop: 2}}>{STEP_META[s].desc}</span>
-                  </span>
-                </button>
-              );
-            })}
-          </div>
+          <WorkflowStepper
+            step={step}
+            scenes={scenes}
+            completedScenes={completedScenes}
+            totalScenes={totalScenes}
+            onStepChange={setStep}
+          />
 
-          {/* Global actions per step */}
-          <div style={globalActionsStyle}>
-            {step === 'script' && (
-              <>
-                <span style={hintStyle}>编辑左侧每段文案，完成后进入「语音」步骤生成音频。</span>
-              </>
-            )}
-            {step === 'audio' && (
-              <>
-                <button type="button" style={buttonStyle('#8be9fd', anyRunning)} onClick={regenerateAllTts} disabled={anyRunning}>
-                  重做全部语音
-                </button>
-                <button type="button" style={buttonStyle('#50fa7b', anyRunning)} onClick={runAllPipeline} disabled={anyRunning}>
-                  一键语音+对齐全部
-                </button>
-                <button type="button" style={buttonStyle('#ffb86c', anyRunning)} onClick={rebuildManifest} disabled={anyRunning}>
-                  重建预览数据
-                </button>
-                {ttsStatus?.running ? (
-                  <span style={{color: '#50fa7b', fontSize: 12}}>语音生成中：{ttsStatusText}</span>
-                ) : null}
-              </>
-            )}
-            {step === 'design' && (
-              <>
-                <span style={hintStyle}>为每个场景生成视觉设计方案，作为后续绘制的参考。</span>
-                <button type="button" style={buttonStyle('#bd93f9', anyRunning)} onClick={rebuildManifest} disabled={anyRunning}>
-                  重建预览数据
-                </button>
-              </>
-            )}
-            {step === 'preview' && (
-              <>
-                <button type="button" style={buttonStyle('#8be9fd', anyRunning)} onClick={rebuildManifest} disabled={anyRunning}>
-                  重建预览数据
-                </button>
-                <button type="button" style={buttonStyle('#bd93f9')} onClick={() => window.open(STUDIO_URL, '_blank')}>
-                  在 Studio 中打开
-                </button>
-              </>
-            )}
-            {step === 'render' && (
-              <>
-                <button type="button" style={buttonStyle('#ff79c6', anyRunning || completedScenes < totalScenes)} onClick={renderVideo} disabled={anyRunning || completedScenes < totalScenes}>
-                  渲染完整视频
-                </button>
-                {completedScenes < totalScenes && (
-                  <span style={{color: '#ff6b6b', fontSize: 12}}>还有 {totalScenes - completedScenes} 段未就绪</span>
-                )}
-              </>
-            )}
-          </div>
+          <WorkflowActions
+            step={step}
+            anyRunning={anyRunning}
+            completedScenes={completedScenes}
+            totalScenes={totalScenes}
+            ttsRunning={Boolean(ttsStatus?.running)}
+            ttsStatusText={ttsStatusText}
+            onRegenerateAllTts={regenerateAllTts}
+            onRunAllPipeline={runAllPipeline}
+            onRebuildManifest={rebuildManifest}
+            onRenderVideo={renderVideo}
+            onOpenStudio={() => window.open(STUDIO_URL, '_blank')}
+          />
 
           {(blockingReason || statusProblem) ? (
             <div style={statusNoticeStyle(statusProblem ? 'error' : 'busy')}>
@@ -964,135 +651,28 @@ export default function App() {
             </div>
           ) : null}
 
-          {/* Scene list */}
-          <div style={sceneListStyle}>
-            {config.scenes.map((scene) => {
-              const status = scenes.find((item) => item.id === scene.id);
-              const live = pipeline?.scenes.find((item) => item.id === scene.id);
-              const isSelected = selectedId === scene.id;
-              const progress = status ? getSceneProgress(status) : 0;
-              const ttsLive = isTtsActiveForScene(scene.id);
-              const codegenLive = isCodegenActiveForScene(scene.id);
-              return (
-                <article
-                  key={scene.id}
-                  style={{
-                    ...sceneCardStyle,
-                    borderColor: isSelected ? '#8be9fd' : 'rgba(255,255,255,0.08)',
-                  }}
-                >
-                  <div style={sceneHeaderStyle} onClick={() => setSelectedId(scene.id)}>
-                    <div style={{display: 'flex', alignItems: 'center', gap: 10}}>
-                      <strong>{scene.id}</strong>
-                      <span style={pillStyle(status?.audioExists, status?.captionExists)}>
-                        {status?.audioExists && status?.captionExists
-                          ? '可预览'
-                          : status?.audioExists
-                            ? '待对齐'
-                            : '待语音'}
-                      </span>
-                    </div>
-                    <div style={{display: 'flex', alignItems: 'center', gap: 8}}>
-                      <StepDots progress={progress} />
-                      <span style={{fontSize: 12, color: '#9fb3c8'}}>{formatDuration(status?.durationMs)}</span>
-                    </div>
-                  </div>
-
-                  {/* Script editing only in script step */}
-                  {step === 'script' ? (
-                    <div style={{padding: '0 14px 14px'}} onClick={(e) => e.stopPropagation()}>
-                      <textarea
-                        value={scene.text}
-                        onChange={(e) => updateSceneText(scene.id, e.target.value)}
-                        style={textareaStyle}
-                        rows={2}
-                      />
-                      <div style={{display: 'flex', justifyContent: 'space-between', marginTop: 6}}>
-                        <span style={{fontSize: 12, color: '#9fb3c8'}}>{scene.text.length} 字</span>
-                        {scene.tuningNotes ? <span style={{fontSize: 12, color: '#bd93f9'}}>有微调备注</span> : null}
-                        {scene.designNotes ? <span style={{fontSize: 12, color: '#50fa7b'}}>有设计方案</span> : null}
-                      </div>
-                    </div>
-                  ) : (
-                    <div style={{padding: '0 14px 14px', fontSize: 14, color: '#c8dcff', lineHeight: 1.6}} onClick={() => setSelectedId(scene.id)}>
-                      {scene.text}
-                      {scene.tuningNotes || scene.designNotes ? (
-                        <div style={{display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap'}}>
-                          {scene.designNotes ? <span style={badgeStyle('#50fa7b')}>设计</span> : null}
-                          {scene.tuningNotes ? <span style={badgeStyle('#bd93f9')}>微调</span> : null}
-                        </div>
-                      ) : null}
-                    </div>
-                  )}
-
-                  {/* Action row */}
-                  <div style={actionRowStyle}>
-                    {step === 'audio' && (
-                      <>
-                        <MiniBtn
-                          disabled={anyRunning}
-                          onClick={() => runTts(scene.id, Boolean(status?.audioExists))}
-                        >
-                          {status?.audioExists ? '重新生成语音' : '生成语音'}
-                        </MiniBtn>
-                        <MiniBtn disabled={anyRunning || !status?.audioExists} onClick={() => runAsr(scene.id)}>
-                          对齐时间轴
-                        </MiniBtn>
-                        <MiniBtn disabled={anyRunning} onClick={() => runScenePipeline(scene.id)}>
-                          本段全流程
-                        </MiniBtn>
-                      </>
-                    )}
-                    {step === 'design' && (
-                      <>
-                        <MiniBtn
-                          disabled={anyRunning}
-                          onClick={() => setModal({kind: 'design', sceneId: scene.id, loading: false})}
-                        >
-                          {scene.designNotes ? '重新设计' : '生成设计方案'}
-                        </MiniBtn>
-                        <MiniBtn
-                          disabled={anyRunning || !status?.captionExists}
-                          onClick={() => runSceneCodegen(scene.id)}
-                        >
-                          生成 Remotion 代码
-                        </MiniBtn>
-                      </>
-                    )}
-                    {step === 'preview' && (
-                      <>
-                        <MiniBtn
-                          disabled={anyRunning || !status?.audioExists}
-                          onClick={() => renderScenePreview(scene.id)}
-                        >
-                          渲染本段预览
-                        </MiniBtn>
-                        <MiniBtn
-                          disabled={anyRunning}
-                          onClick={() => setModal({kind: 'tune', sceneId: scene.id, prompt: '', result: '', loading: false})}
-                        >
-                          LLM 微调
-                        </MiniBtn>
-                      </>
-                    )}
-                    {codegenLive ? (
-                      <span style={{fontSize: 12, color: '#bd93f9', marginLeft: 'auto'}}>
-                        Remotion 代码生成中：{codegen?.message}
-                      </span>
-                    ) : ttsLive ? (
-                      <span style={{fontSize: 12, color: '#50fa7b', marginLeft: 'auto'}}>
-                        语音生成中：{ttsStatus?.message}
-                      </span>
-                    ) : live ? (
-                      <span style={{fontSize: 12, color: '#8be9fd', marginLeft: 'auto'}}>
-                        运行中：{live.step}/{live.status}
-                      </span>
-                    ) : null}
-                  </div>
-                </article>
-              );
-            })}
-          </div>
+          <SceneList
+            configScenes={config.scenes}
+            sceneStatuses={scenes}
+            pipeline={pipeline}
+            selectedId={selectedId}
+            step={step}
+            anyRunning={anyRunning}
+            ttsStatus={ttsStatus}
+            codegen={codegen}
+            onSelect={setSelectedId}
+            onUpdateSceneText={updateSceneText}
+            onRunTts={runTts}
+            onRunAsr={runAsr}
+            onRunScenePipeline={runScenePipeline}
+            onOpenDesign={(sceneId) => setModal({kind: 'design', sceneId, prompt: '', loading: false})}
+            onRunSceneCodegen={runSceneCodegen}
+            onRenderScenePreview={renderScenePreview}
+            onOpenTune={(sceneId) => {
+              setSelectedId(sceneId);
+              setTuneDialogOpen(true);
+            }}
+          />
         </section>
 
         {/* RIGHT COLUMN */}
@@ -1113,15 +693,55 @@ export default function App() {
               <>
                 {/* SCRIPT PANEL */}
                 {step === 'script' && (
-                  <Panel title="文案编辑" subtitle={`${selectedScene.id} · ${selectedScene.text.length} 字`}>
-                    <textarea
-                      value={selectedConfigScene?.text ?? ''}
-                      onChange={(e) => updateSceneText(selectedScene.id, e.target.value)}
-                      style={{...textareaStyle, minHeight: 120}}
-                      rows={4}
-                    />
-                    <p style={hintStyle}>修改文案后点击左上角「保存脚本」生效。</p>
-                  </Panel>
+                  <>
+                    <Panel title="文案编辑" subtitle={`${selectedScene.id} · ${selectedScene.text.length} 字`}>
+                      <textarea
+                        value={selectedConfigScene?.text ?? ''}
+                        onChange={(e) => updateSceneText(selectedScene.id, e.target.value)}
+                        style={{...textareaStyle, minHeight: 120}}
+                        rows={4}
+                      />
+                      <p style={hintStyle}>修改文案后点击左上角「保存脚本」生效。</p>
+                    </Panel>
+
+                    <Panel title="OpenAI / LLM 配置" subtitle="用于设计生成和 OpenAI provider">
+                      <div style={llmConfigGridStyle}>
+                        <label style={fieldLabelStyle}>
+                          Base URL
+                          <input
+                            value={config.llmBaseUrl ?? ''}
+                            onChange={(e) => updateConfigField('llmBaseUrl', e.target.value)}
+                            placeholder="https://api.openai.com"
+                            disabled={anyRunning}
+                            style={smallInputStyle}
+                          />
+                        </label>
+                        <label style={fieldLabelStyle}>
+                          API Key
+                          <input
+                            type="password"
+                            value={config.llmApiKey ?? ''}
+                            onChange={(e) => updateConfigField('llmApiKey', e.target.value)}
+                            placeholder="sk-..."
+                            disabled={anyRunning}
+                            style={smallInputStyle}
+                            autoComplete="off"
+                          />
+                        </label>
+                        <label style={fieldLabelStyle}>
+                          Model
+                          <input
+                            value={config.llmModel ?? ''}
+                            onChange={(e) => updateConfigField('llmModel', e.target.value)}
+                            placeholder="gpt-5.5"
+                            disabled={anyRunning}
+                            style={smallInputStyle}
+                          />
+                        </label>
+                      </div>
+                      <p style={hintStyle}>这里会写入 src/composer/script.json；如果使用 Kimi Wire，这些字段主要影响设计方案等 OpenAI 兼容接口调用。</p>
+                    </Panel>
+                  </>
                 )}
 
                 {/* AUDIO PANEL */}
@@ -1209,18 +829,37 @@ export default function App() {
                 {/* DESIGN PANEL */}
                 {step === 'design' && (
                   <>
-                    <Panel title="视觉设计方案" subtitle={selectedConfigScene?.designNotes ? '已有方案' : '未生成'}>
-                      {selectedConfigScene?.designNotes ? (
-                        <pre style={markdownPreviewStyle}>{selectedConfigScene.designNotes}</pre>
-                      ) : (
-                        <div style={emptyStyle}>点击「生成设计方案」让 LLM 分析画面布局。</div>
-                      )}
+                    <SceneAssetsPanel
+                      sceneId={selectedScene.id}
+                      assets={selectedConfigScene?.assets ?? []}
+                      assetFile={assetFile}
+                      assetRole={assetRole}
+                      assetNotes={assetNotes}
+                      loading={assetLoading}
+                      disabled={anyRunning}
+                      onFileChange={setAssetFile}
+                      onRoleChange={setAssetRole}
+                      onNotesChange={setAssetNotes}
+                      onUpload={() => uploadSceneAsset(selectedScene.id)}
+                      onDelete={(assetId) => deleteSceneAsset(selectedScene.id, assetId)}
+                    />
+
+                    <Panel title="视觉设计方案" subtitle={selectedConfigScene?.designNotes ? '可编辑' : '未生成'}>
+                      <textarea
+                        value={selectedConfigScene?.designNotes ?? ''}
+                        onChange={(e) => updateSceneDesign(selectedScene.id, e.target.value)}
+                        placeholder="点击「重新生成设计方案」自动生成，或在这里直接编辑画面设计、节奏、字幕位置和素材使用要求。"
+                        disabled={anyRunning}
+                        style={{...textareaStyle, minHeight: 280, fontFamily: 'Consolas, monospace'}}
+                        rows={12}
+                      />
+                      <p style={hintStyle}>编辑后点击左上角「保存脚本」写入配置；生成 Remotion 代码前也会自动保存当前内容。</p>
                       <div style={{display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap'}}>
                         <button
                           type="button"
                           style={buttonStyle('#bd93f9', anyRunning)}
                           onClick={() =>
-                            setModal({kind: 'design', sceneId: selectedScene.id, loading: false})
+                            setModal({kind: 'design', sceneId: selectedScene.id, prompt: '', loading: false})
                           }
                           disabled={anyRunning}
                         >
@@ -1286,17 +925,15 @@ export default function App() {
                       {selectedConfigScene?.tuningNotes ? (
                         <pre style={markdownPreviewStyle}>{selectedConfigScene.tuningNotes}</pre>
                       ) : (
-                        <div style={emptyStyle}>通过 LLM 获取画面、节奏、字幕和动效的微调建议。</div>
+                        <div style={emptyStyle}>通过对话描述预览问题，OpenAI Agent 会结合时间轴重新生成 Remotion 代码。</div>
                       )}
                       <button
                         type="button"
                         style={{...buttonStyle('#8be9fd', anyRunning), marginTop: 12}}
-                        onClick={() =>
-                          setModal({kind: 'tune', sceneId: selectedScene.id, prompt: '', result: '', loading: false})
-                        }
+                        onClick={() => setTuneDialogOpen(true)}
                         disabled={anyRunning}
                       >
-                        打开微调助手
+                        打开微调对话
                       </button>
                     </Panel>
 
@@ -1381,239 +1018,45 @@ export default function App() {
         </aside>
       </div>
 
-      {/* MODALS */}
-      {modal?.kind === 'tune' && (
-        <div style={modalBackdropStyle} onClick={() => setModal(null)}>
-          <div style={modalStyle} onClick={(e) => e.stopPropagation()}>
-            <h2 style={{marginTop: 0}}>LLM 微调 · {modal.sceneId}</h2>
-            <p style={hintStyle}>描述你想调整的视觉效果、节奏、镜头、文字动画或情绪。</p>
-            <textarea
-              style={{...textareaStyle, minHeight: 110}}
-              value={modal.prompt}
-              onChange={(e) => setModal({...modal, prompt: e.target.value})}
-              placeholder="例如：这一段节奏太平，想要更强的冲击感，字幕出现更快，背景更有科技感。"
-            />
-            <div style={{display: 'flex', gap: 8, margin: '12px 0'}}>
-              <button
-                type="button"
-                style={buttonStyle('#8be9fd', modal.loading || !modal.prompt.trim())}
-                onClick={requestTune}
-                disabled={modal.loading || !modal.prompt.trim()}
-              >
-                {modal.loading ? '生成中...' : '生成微调建议'}
-              </button>
-              <button type="button" style={buttonStyle('#50fa7b', !modal.result.trim())} onClick={applyTuneResult} disabled={!modal.result.trim()}>
-                应用建议
-              </button>
-              <button type="button" style={buttonStyle('#ff6b6b')} onClick={() => setModal(null)}>
-                关闭
-              </button>
-            </div>
-            <LlmStreamPanel
-              logs={modal.streamLogs}
-              thinking={modal.thinking}
-              result={modal.result}
-              error={modal.error}
-              provider={modal.provider}
-            />
-          </div>
-        </div>
-      )}
+      <TuneCodegenDialog
+        open={Boolean(tuneDialogOpen && selectedScene)}
+        sceneId={selectedScene?.id ?? ''}
+        sceneText={selectedConfigScene?.text ?? selectedScene?.text ?? ''}
+        disabled={anyRunning}
+        onClose={() => setTuneDialogOpen(false)}
+        onDone={async (payload) => {
+          if (payload?.config) setConfig(payload.config as Config);
+          const status = await fetchJson<CodegenStatus>('/api/scene/codegen/status');
+          setCodegen(status);
+          await refresh();
+          setCacheKey(Date.now());
+          pushLog(`${selectedScene?.id ?? '当前场景'} 已根据微调对话重新生成 Remotion 代码`);
+        }}
+      />
 
-      {modal?.kind === 'design' && (
-        <div style={modalBackdropStyle} onClick={() => setModal(null)}>
-          <div style={modalStyle} onClick={(e) => e.stopPropagation()}>
-            <h2 style={{marginTop: 0}}>视觉设计方案 · {modal.sceneId}</h2>
-            <p style={hintStyle}>调用 LLM 根据文案和时长分析最佳画面布局、色彩和动画节奏。</p>
-            <div style={{display: 'flex', gap: 8, margin: '12px 0'}}>
-              <button
-                type="button"
-                style={buttonStyle('#bd93f9', modal.loading)}
-                onClick={requestDesign}
-                disabled={modal.loading}
-              >
-                {modal.loading ? '分析中...' : '生成设计方案'}
-              </button>
-              <button type="button" style={buttonStyle('#ff6b6b')} onClick={() => setModal(null)}>
-                关闭
-              </button>
-            </div>
-            <LlmStreamPanel
-              logs={modal.streamLogs}
-              thinking={modal.thinking}
-              result={modal.result ?? modalConfigScene?.designNotes ?? ''}
-              error={modal.error}
-              provider={modal.provider}
-            />
-          </div>
-        </div>
-      )}
+      {modal?.kind === 'design' ? (
+        <DesignDialog
+          modal={{...modal, result: modal.result ?? modalConfigScene?.designNotes ?? ''}}
+          assets={modalConfigScene?.assets ?? []}
+          assetFile={assetFile}
+          assetRole={assetRole}
+          assetNotes={assetNotes}
+          assetLoading={assetLoading}
+          onClose={() => setModal(null)}
+          onModalChange={(nextModal) => setModal(nextModal)}
+          onAssetFileChange={setAssetFile}
+          onAssetRoleChange={setAssetRole}
+          onAssetNotesChange={setAssetNotes}
+          onRequestDesign={requestDesign}
+        />
+      ) : null}
     </Shell>
     </ErrorBoundary>
   );
 }
 
-/* ---------- sub-components ---------- */
-
-function Shell({children}: {children: React.ReactNode}) {
-  return <div style={shellStyle}>{children}</div>;
-}
-
-function Panel({title, subtitle, children}: {title: string; subtitle: string; children: React.ReactNode}) {
-  return (
-    <div style={panelCardStyle}>
-      <div style={{marginBottom: 12}}>
-        <h3 style={{margin: 0, fontSize: 15}}>{title}</h3>
-        <p style={{margin: '4px 0 0', fontSize: 12, color: '#9fb3c8'}}>{subtitle}</p>
-      </div>
-      {children}
-    </div>
-  );
-}
-
-function LlmStreamPanel({
-  logs = [],
-  thinking = '',
-  result = '',
-  error,
-  provider,
-}: {
-  logs?: string[];
-  thinking?: string;
-  result?: string;
-  error?: string;
-  provider?: string;
-}) {
-  if (!logs.length && !thinking && !result && !error && !provider) return null;
-  return (
-    <div style={{display: 'grid', gap: 10, marginTop: 12}}>
-      <div style={{display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap'}}>
-        {provider ? <span style={badgeStyle('#8be9fd')}>provider: {provider}</span> : null}
-        {error ? <span style={badgeStyle('#ff6b6b')}>error</span> : null}
-      </div>
-      {logs.length ? (
-        <div style={{...logBoxStyle, maxHeight: 120}}>
-          {logs.map((line, i) => (
-            <div key={i}>{line}</div>
-          ))}
-        </div>
-      ) : null}
-      {thinking ? (
-        <div>
-          <div style={streamLabelStyle}>思考过程</div>
-          <pre style={thinkingPreviewStyle}>{thinking}</pre>
-        </div>
-      ) : null}
-      {result ? (
-        <div>
-          <div style={streamLabelStyle}>实时回复</div>
-          <pre style={tuneResultStyle}>{result}</pre>
-        </div>
-      ) : null}
-      {error ? <pre style={{...tuneResultStyle, color: '#ffb4b4'}}>{error}</pre> : null}
-    </div>
-  );
-}
-
-function MiniBtn({children, disabled, onClick}: {children: React.ReactNode; disabled?: boolean; onClick?: () => void}) {
-  return (
-    <button type="button" style={miniButtonStyle('#8be9fd', Boolean(disabled))} disabled={disabled} onClick={(e) => { e.stopPropagation(); onClick?.(); }}>
-      {children}
-    </button>
-  );
-}
-
-function StepDots({progress}: {progress: number}) {
-  return (
-    <div style={{display: 'flex', gap: 4}}>
-      {[1, 2, 3, 4, 5].map((i) => (
-        <div
-          key={i}
-          style={{
-            width: 7,
-            height: 7,
-            borderRadius: '50%',
-            background: i <= progress ? '#50fa7b' : 'rgba(255,255,255,0.15)',
-          }}
-        />
-      ))}
-    </div>
-  );
-}
-
-function CaptionTimeline({scene}: {scene: SceneItem}) {
-  const [data, setData] = useState<any>(null);
-  useEffect(() => {
-    if (!scene.captionsUrl) return;
-    fetch(`${scene.captionsUrl}?t=${Date.now()}`)
-      .then((r) => r.json())
-      .then(setData)
-      .catch(() => {});
-  }, [scene.captionsUrl]);
-
-  if (!data?.cues?.length) return <div style={emptyStyle}>加载时间轴数据中...</div>;
-
-  const totalFrames = data.durationInFrames || data.cues[data.cues.length - 1]?.endFrame || 1;
-  const pxPerFrame = 800 / totalFrames;
-
-  return (
-    <div style={{overflowX: 'auto'}}>
-      <div style={{display: 'flex', flexDirection: 'column', gap: 6, minWidth: 600}}>
-        {data.cues.map((cue: any) => {
-          const left = (cue.startFrame / totalFrames) * 100;
-          const width = ((cue.endFrame - cue.startFrame) / totalFrames) * 100;
-          return (
-            <div key={cue.id} style={{display: 'flex', alignItems: 'center', gap: 8}}>
-              <div style={{width: 60, fontSize: 11, color: '#9fb3c8', flexShrink: 0, textAlign: 'right'}}>
-                {(cue.startFrame / 30).toFixed(1)}s
-              </div>
-              <div style={{flex: 1, position: 'relative', height: 28, background: 'rgba(255,255,255,0.04)', borderRadius: 6}}>
-                <div
-                  style={{
-                    position: 'absolute',
-                    left: `${left}%`,
-                    width: `${Math.max(width, 0.5)}%`,
-                    top: 4,
-                    bottom: 4,
-                    background: 'rgba(139,233,253,0.25)',
-                    borderRadius: 4,
-                    border: '1px solid rgba(139,233,253,0.4)',
-                  }}
-                />
-                <span
-                  style={{
-                    position: 'absolute',
-                    left: `${left}%`,
-                    top: '50%',
-                    transform: 'translateY(-50%)',
-                    paddingLeft: 6,
-                    fontSize: 12,
-                    color: '#e6edf3',
-                    whiteSpace: 'nowrap',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    maxWidth: '90%',
-                  }}
-                >
-                  {cue.text}
-                </span>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-      <p style={{...hintStyle, marginTop: 8}}>
-        共 {data.cues.length} 个片段 · {data.wordCount ?? data.cues.reduce((sum: number, cue: any) => sum + (cue.words?.length ?? 0), 0)} 个词/字 ·
-        总时长 {formatDuration(Math.round((totalFrames / 30) * 1000))}
-        {data.alignmentSource ? ` · ${data.alignmentSource === 'asr' ? 'ASR' : '估算'}对齐` : ''}
-      </p>
-    </div>
-  );
-}
-
 /* ---------- styles ---------- */
 
-const shellStyle: React.CSSProperties = {height: '100vh', background: '#0b1020', color: '#e6edf3', fontFamily: 'Inter, Segoe UI, Arial, sans-serif', overflow: 'hidden'};
 const layoutStyle: React.CSSProperties = {height: '100%', display: 'grid', gridTemplateColumns: 'minmax(560px, 1fr) 46%', gap: 0};
 const leftStyle: React.CSSProperties = {padding: 20, overflow: 'auto', borderRight: '1px solid rgba(255,255,255,0.08)', display: 'flex', flexDirection: 'column'};
 const rightStyle: React.CSSProperties = {display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0, background: '#080c18'};
@@ -1621,20 +1064,11 @@ const rightHeaderStyle: React.CSSProperties = {padding: '16px 20px', borderBotto
 const headerStyle: React.CSSProperties = {display: 'flex', justifyContent: 'space-between', gap: 16, alignItems: 'flex-start', marginBottom: 14};
 const titleStyle: React.CSSProperties = {margin: 0, fontSize: 22};
 const subStyle: React.CSSProperties = {margin: '6px 0 0', color: '#9fb3c8', fontSize: 13};
-const stepperStyle: React.CSSProperties = {display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 8, marginBottom: 14};
-const globalActionsStyle: React.CSSProperties = {display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 14, minHeight: 36};
-const sceneListStyle: React.CSSProperties = {display: 'grid', gap: 10};
-const sceneCardStyle: React.CSSProperties = {background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 12};
-const sceneHeaderStyle: React.CSSProperties = {display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 14px', cursor: 'pointer'};
-const providerSelectStyle: React.CSSProperties = {borderRadius: 10, border: '1px solid rgba(139,233,253,0.25)', background: '#070b16', color: '#e6edf3', padding: '9px 10px', fontSize: 13, fontWeight: 700};
 const modelInputStyle: React.CSSProperties = {width: 150, borderRadius: 10, border: '1px solid rgba(139,233,253,0.25)', background: '#070b16', color: '#e6edf3', padding: '9px 10px', fontSize: 13, fontWeight: 700};
-const cliCommandInputStyle: React.CSSProperties = {width: 360, maxWidth: '42vw', borderRadius: 10, border: '1px solid rgba(189,147,249,0.3)', background: '#070b16', color: '#e6edf3', padding: '9px 10px', fontSize: 13, fontFamily: 'Consolas, monospace'};
 const voiceCloneGridStyle: React.CSSProperties = {display: 'grid', gridTemplateColumns: '1.1fr 0.7fr 0.9fr auto', gap: 8, alignItems: 'center'};
 const smallInputStyle: React.CSSProperties = {minWidth: 0, borderRadius: 10, border: '1px solid rgba(255,255,255,0.1)', background: '#070b16', color: '#e6edf3', padding: '9px 10px', fontSize: 13};
 const fileInputStyle: React.CSSProperties = {minWidth: 0, borderRadius: 10, border: '1px solid rgba(255,255,255,0.1)', background: '#070b16', color: '#e6edf3', padding: '7px 10px', fontSize: 13};
 const textareaStyle: React.CSSProperties = {width: '100%', boxSizing: 'border-box', resize: 'vertical', borderRadius: 10, border: '1px solid rgba(255,255,255,0.1)', background: '#070b16', color: '#e6edf3', padding: 10, lineHeight: 1.5, fontSize: 14};
-const actionRowStyle: React.CSSProperties = {display: 'flex', gap: 8, flexWrap: 'wrap', padding: '0 14px 12px'};
-const panelCardStyle: React.CSSProperties = {background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 12, padding: 14, marginBottom: 12};
 const videoStyle: React.CSSProperties = {width: '100%', maxHeight: '56vh', background: '#000', borderRadius: 12};
 const logBoxStyle: React.CSSProperties = {overflow: 'auto', background: '#05070d', borderRadius: 12, padding: 12, fontFamily: 'Consolas, monospace', fontSize: 12, lineHeight: 1.6, whiteSpace: 'pre-wrap', maxHeight: 320};
 const emptyStyle: React.CSSProperties = {display: 'grid', placeItems: 'center', minHeight: 160, color: '#9fb3c8', textAlign: 'center', fontSize: 13};
@@ -1655,12 +1089,9 @@ const statusNoticeStyle = (tone: 'busy' | 'error'): React.CSSProperties => ({
   fontSize: 12,
   lineHeight: 1.45,
 });
-const modalBackdropStyle: React.CSSProperties = {position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.65)', display: 'grid', placeItems: 'center', zIndex: 20};
-const modalStyle: React.CSSProperties = {width: 'min(720px, 92vw)', maxHeight: '86vh', overflow: 'auto', background: '#11182c', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 18, padding: 20, boxShadow: '0 24px 80px rgba(0,0,0,0.45)'};
-const tuneResultStyle: React.CSSProperties = {whiteSpace: 'pre-wrap', background: '#05070d', borderRadius: 12, padding: 12, color: '#e6edf3', maxHeight: 260, overflow: 'auto', fontSize: 13, lineHeight: 1.6};
 const markdownPreviewStyle: React.CSSProperties = {whiteSpace: 'pre-wrap', background: '#05070d', borderRadius: 12, padding: 12, color: '#c8dcff', fontSize: 13, lineHeight: 1.7};
-const thinkingPreviewStyle: React.CSSProperties = {whiteSpace: 'pre-wrap', background: '#07101e', borderRadius: 12, padding: 12, color: '#b8c7ff', maxHeight: 180, overflow: 'auto', fontSize: 12, lineHeight: 1.6, border: '1px solid rgba(139,233,253,0.12)'};
-const streamLabelStyle: React.CSSProperties = {fontSize: 12, color: '#9fb3c8', marginBottom: 6, fontWeight: 700};
+const fieldLabelStyle: React.CSSProperties = {display: 'grid', gap: 6, fontSize: 12, color: '#9fb3c8', fontWeight: 700};
+const llmConfigGridStyle: React.CSSProperties = {display: 'grid', gridTemplateColumns: '1fr 1fr 180px', gap: 10, alignItems: 'end'};
 
 function buttonStyle(color: string, disabled = false): React.CSSProperties {
   return {
@@ -1673,55 +1104,5 @@ function buttonStyle(color: string, disabled = false): React.CSSProperties {
     fontWeight: 700,
     fontSize: 13,
     opacity: disabled ? 0.62 : 1,
-  };
-}
-
-function miniButtonStyle(color = '#8be9fd', disabled = false): React.CSSProperties {
-  return {
-    background: disabled ? 'rgba(255,255,255,0.04)' : `${color}12`,
-    color: disabled ? '#617089' : color,
-    border: `1px solid ${disabled ? 'rgba(255,255,255,0.1)' : `${color}25`}`,
-    borderRadius: 8,
-    padding: '6px 10px',
-    cursor: disabled ? 'not-allowed' : 'pointer',
-    fontSize: 12,
-    opacity: disabled ? 0.58 : 1,
-  };
-}
-
-function pillStyle(audio = false, caption = false): React.CSSProperties {
-  const color = audio && caption ? '#50fa7b' : audio ? '#ffb86c' : '#ff6b6b';
-  return {fontSize: 11, color, border: `1px solid ${color}55`, borderRadius: 999, padding: '3px 8px', background: `${color}14`};
-}
-
-function badgeStyle(color: string): React.CSSProperties {
-  return {fontSize: 11, color, border: `1px solid ${color}44`, borderRadius: 6, padding: '2px 8px', background: `${color}12`};
-}
-
-function stepButtonStyle(active: boolean, clickable: boolean): React.CSSProperties {
-  return {
-    display: 'flex',
-    alignItems: 'flex-start',
-    gap: 8,
-    padding: '10px 8px',
-    borderRadius: 10,
-    border: `1px solid ${active ? 'rgba(139,233,253,0.35)' : 'rgba(255,255,255,0.08)'}`,
-    background: active ? 'rgba(139,233,253,0.08)' : 'rgba(255,255,255,0.02)',
-    color: clickable ? '#e6edf3' : '#5a6a80',
-    cursor: clickable ? 'pointer' : 'not-allowed',
-    textAlign: 'left',
-    opacity: clickable ? 1 : 0.6,
-  };
-}
-
-function stepDotStyle(active: boolean): React.CSSProperties {
-  return {
-    width: 10,
-    height: 10,
-    borderRadius: '50%',
-    marginTop: 4,
-    flexShrink: 0,
-    background: active ? '#8be9fd' : 'rgba(255,255,255,0.2)',
-    boxShadow: active ? '0 0 8px #8be9fd80' : 'none',
   };
 }

@@ -10,6 +10,15 @@ import {readJsonFile} from './src/composer/json-utils.mjs';
 import {synthesizeLipVoice} from './src/composer/voice-synthesis.mjs';
 import {alignScenes, getAudioDurationFrames} from './src/composer/voice-alignment.mjs';
 import {runSceneAgent} from './src/composer/scene-agent.mjs';
+import {
+  buildSceneAssetsMarkdown,
+  createSceneAssetRecord,
+  normalizeAssetRole,
+  normalizeSceneAssets,
+  SCENE_ASSET_PUBLIC_DIR,
+  sceneAssetsForStorage,
+  validateSceneImageFile,
+} from './src/composer/scene-assets.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -20,6 +29,7 @@ const SCRIPT_PATH = path.join(__dirname, 'src/composer/script.json');
 const MANIFEST_PATH = path.join(__dirname, 'public/scenes-manifest.json');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const OUTPUT_DIR = path.join(__dirname, 'output');
+const SCENE_ASSET_DIR = path.join(__dirname, SCENE_ASSET_PUBLIC_DIR);
 const editorDist = path.join(__dirname, 'editor/dist');
 const SCENE_TAIL_PADDING_SECONDS = 1;
 
@@ -213,6 +223,7 @@ async function buildManifest() {
         captionsFile,
         durationInFrames,
         cues: cap?.cues ?? [],
+        assets: normalizeSceneAssets(scene.assets),
       });
     }
   }
@@ -240,6 +251,7 @@ async function getScenesStatus() {
       captionsUrl: captionExists ? `/public/captions/${scene.id}.json` : null,
       designNotes: scene.designNotes || '',
       tuningNotes: scene.tuningNotes || '',
+      assets: normalizeSceneAssets(scene.assets, {includeUrl: true}),
     };
   }));
   return {fps: script.fps, scenes};
@@ -284,6 +296,11 @@ const sceneTimingPrompt = async (sceneId) => {
       cueLines,
     ].join('\n'),
   };
+};
+
+const sceneAssetsPrompt = async (sceneId) => {
+  const {scene} = await findScene(sceneId);
+  return buildSceneAssetsMarkdown(scene.assets);
 };
 
 app.get('/api/config', async (req, res) => {
@@ -416,6 +433,75 @@ app.post('/api/tts/clone', express.raw({type: 'multipart/form-data', limit: '55m
     };
     await fs.writeFile(SCRIPT_PATH, JSON.stringify(nextScript, null, 2), 'utf-8');
     res.json({success: true, data, config: nextScript});
+  } catch (e) {
+    res.status(400).json({error: e.message});
+  }
+});
+
+app.post('/api/scene/assets', express.raw({type: 'multipart/form-data', limit: '22mb'}), async (req, res) => {
+  try {
+    const script = await readScript();
+    const {fields, files} = parseMultipartBody(req.body, req.headers['content-type']);
+    const sceneId = String(fields.sceneId || '').trim();
+    if (!/^scene\d+$/i.test(sceneId)) throw new Error('sceneId must look like scene1, scene2, ...');
+    const role = normalizeAssetRole(fields.role);
+    const notes = String(fields.notes || '').trim();
+    const file = files.file;
+    const sceneIndex = script.scenes.findIndex((item) => item.id === sceneId);
+    if (sceneIndex === -1) throw new Error(`Scene not found: ${sceneId}`);
+    validateSceneImageFile(file);
+
+    const {asset, storedName} = createSceneAssetRecord({sceneId, file, role, notes});
+    const assetDir = path.join(SCENE_ASSET_DIR, sceneId);
+    await fs.mkdir(assetDir, {recursive: true});
+    const assetPath = path.join(assetDir, storedName);
+    await fs.writeFile(assetPath, file.buffer);
+
+    const nextScenes = script.scenes.map((scene, index) => (
+      index === sceneIndex
+        ? {...scene, assets: [...sceneAssetsForStorage(scene.assets), asset]}
+        : scene
+    ));
+    const nextScript = {...script, scenes: nextScenes};
+    await fs.writeFile(SCRIPT_PATH, JSON.stringify(nextScript, null, 2), 'utf-8');
+    await buildManifest().catch(() => {});
+    res.json({success: true, asset: normalizeSceneAssets([asset], {includeUrl: true})[0], config: nextScript});
+  } catch (e) {
+    res.status(400).json({error: e.message});
+  }
+});
+
+app.post('/api/scene/assets/delete', async (req, res) => {
+  try {
+    const sceneId = String(req.body?.sceneId || '').trim();
+    const assetId = String(req.body?.assetId || '').trim();
+    if (!/^scene\d+$/i.test(sceneId)) throw new Error('sceneId must look like scene1, scene2, ...');
+    const script = await readScript();
+    const sceneIndex = script.scenes.findIndex((item) => item.id === sceneId);
+    if (sceneIndex === -1) throw new Error(`Scene not found: ${sceneId}`);
+    const assets = normalizeSceneAssets(script.scenes[sceneIndex].assets);
+    const asset = assets.find((item) => item.id === assetId);
+    if (!asset) throw new Error(`Asset not found: ${assetId}`);
+
+    const absAssetPath = path.resolve(__dirname, asset.file);
+    const allowedRoot = path.resolve(SCENE_ASSET_DIR, String(sceneId));
+    const relativeAssetPath = path.relative(allowedRoot, absAssetPath);
+    if (relativeAssetPath.startsWith('..') || path.isAbsolute(relativeAssetPath)) {
+      throw new Error('Refusing to delete asset outside scene asset directory');
+    }
+    await fs.unlink(absAssetPath).catch((error) => {
+      if (error.code !== 'ENOENT') throw error;
+    });
+
+    const nextScenes = script.scenes.map((scene, index) => (
+      index === sceneIndex
+        ? {...scene, assets: sceneAssetsForStorage(assets.filter((item) => item.id !== assetId))}
+        : scene
+    ));
+    const nextScript = {...script, scenes: nextScenes};
+    await fs.writeFile(SCRIPT_PATH, JSON.stringify(nextScript, null, 2), 'utf-8');
+    await buildManifest().catch(() => {});
+    res.json({success: true, config: nextScript});
   } catch (e) {
     res.status(400).json({error: e.message});
   }
@@ -649,80 +735,134 @@ async function streamLlmChat(res, {system, user, fallback, model}) {
   return {text, thinking, provider: 'openai'};
 }
 
-app.post('/api/scene/tune', async (req, res) => {
-  const {sceneId, text, prompt, currentNotes = ''} = req.body || {};
-  console.log(`[api/scene/tune] scene=${sceneId}`);
-  try {
-    if (!prompt?.trim()) throw new Error('Prompt is required');
-
-    const fallback = [
-      `Scene: ${sceneId}`,
-      `目标：${prompt}`,
-      '',
-      '建议调整：',
-      '- 视觉：根据目标强化背景、主体图形和颜色对比。',
-      '- 节奏：关键文字提前出现，结尾保留 1 秒缓冲。',
-      '- 动画：减少无意义运动，突出本段核心概念。',
-      '- 字幕：优先保证可读性，避免和主体元素冲突。',
-      currentNotes ? `\n已有备注：${currentNotes}` : '',
-    ].filter(Boolean).join('\n');
-
-    const apiKey = await getLlmApiKey();
-    if (!apiKey) {
-      return res.json({success: true, suggestion: fallback, provider: 'fallback'});
-    }
-
-    const suggestion = await llmChat(
-      '你是 Remotion 短视频视觉导演。给出可执行、具体、简洁的单场景微调建议，聚焦画面、节奏、字幕和动效。请用 Markdown 列表形式输出，每条建议不超过 40 字。',
-      `sceneId: ${sceneId}\n文案: ${text}\n当前备注: ${currentNotes}\n用户要求: ${prompt}`,
-    );
-    res.json({success: true, suggestion: suggestion || fallback, provider: 'openai'});
-  } catch (e) {
-    res.status(500).json({error: e.message});
-  }
-});
-
-app.post('/api/scene/tune/stream', async (req, res) => {
-  const {sceneId, text, prompt, currentNotes = ''} = req.body || {};
-  console.log(`[api/scene/tune/stream] scene=${sceneId}`);
+app.post('/api/scene/tune-codegen/stream', async (req, res) => {
+  const {sceneId, prompt, history = []} = req.body || {};
+  console.log(`[api/scene/tune-codegen/stream] scene=${sceneId}`);
   res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders?.();
 
   try {
+    if (!sceneId || !/^scene\d+$/i.test(sceneId)) throw new Error('sceneId is required');
     if (!prompt?.trim()) throw new Error('Prompt is required');
+    if (codegenState.running) throw new Error('Scene code generation is already running');
+
+    const {script, scene} = await findScene(sceneId);
+    const captions = await captionData(sceneId);
+    if (!captions?.durationInFrames || !Array.isArray(captions.cues) || captions.cues.length === 0) {
+      throw new Error(`${sceneId} has no usable alignment. Run ASR/time alignment before tuning Remotion code.`);
+    }
+
+    const timing = await sceneTimingPrompt(sceneId);
+    const assetContext = await sceneAssetsPrompt(sceneId);
+    const conversation = Array.isArray(history)
+      ? history.slice(-12).map((item) => `${item.role === 'assistant' ? 'Assistant' : 'User'}: ${item.content ?? ''}`).join('\n')
+      : '';
+    const currentNotes = scene.tuningNotes ?? '';
+    const tuningBlock = [
+      currentNotes,
+      '',
+      `## LLM 对话微调 ${new Date().toISOString()}`,
+      conversation ? `\n### 对话上下文\n${conversation}` : '',
+      `\n### 本轮用户要求\n${prompt.trim()}`,
+      '',
+      '执行要求：结合精确字幕时间轴、现有 designNotes 和上述对话要求，重新生成 Remotion 场景代码；优先修正预览中指出的画面、节奏、字幕和动效问题。',
+    ].filter(Boolean).join('\n').trim();
+
+    const nextScript = {
+      ...script,
+      codegenProvider: 'openai',
+      scenes: script.scenes.map((item) => item.id === sceneId ? {...item, tuningNotes: tuningBlock} : item),
+    };
+    delete nextScript.codegenCliCommand;
+    await fs.writeFile(SCRIPT_PATH, JSON.stringify(nextScript, null, 2), 'utf-8');
+    sendSse(res, 'status', {message: '已保存本轮微调要求，开始让 LLM 分析修改方案', provider: 'openai'});
 
     const fallback = [
-      `Scene: ${sceneId}`,
-      `目标：${prompt}`,
-      '',
-      '建议调整：',
-      '- 视觉：围绕目标强化主体、对比和画面层级。',
-      '- 节奏：关键文字提前出现，结尾保留 1 秒缓冲。',
-      '- 动画：减少无意义运动，突出本段核心概念。',
-      '- 字幕：优先保证可读性，避免和主体元素冲突。',
-      currentNotes ? `\n已有备注：${currentNotes}` : '',
-    ].filter(Boolean).join('\n');
+      '我会按你的要求重新生成 Remotion 代码：',
+      `- 场景：${sceneId}`,
+      `- 时间轴：${timing.durationSeconds ?? '未知'}s / ${captions.durationInFrames}f`,
+      '- 重点：基于当前字幕 cue 和 words 精准调整画面节奏',
+      '- 输出：更新生成场景 TSX，并执行 TypeScript 与编辑器构建校验',
+    ].join('\n');
 
     await streamLlmChat(res, {
       fallback,
-      system: '你是 Remotion 短视频视觉导演。给出可执行、具体、简洁的单场景微调建议，聚焦画面、节奏、字幕和动效。请用 Markdown 列表输出，每条建议不超过 40 字。',
-      user: `sceneId: ${sceneId}\n文案: ${text}\n当前备注: ${currentNotes}\n用户要求: ${prompt}`,
+      system: '你是 Remotion 代码微调 Agent。根据用户对预览效果的反馈，先用简洁中文说明你将如何调整画面、节奏、字幕、动效。不要输出代码。',
+      user: [
+        `sceneId: ${sceneId}`,
+        `用户本轮要求: ${prompt.trim()}`,
+        '',
+        `现有 tuningNotes:\n${currentNotes || '(empty)'}`,
+        '',
+        `对话上下文:\n${conversation || '(empty)'}`,
+        '',
+        `Image assets and visual references:\n${assetContext}`,
+        '',
+        `精确字幕/词块时间轴:\n${timing.summary}`,
+      ].join('\n'),
     });
+
+    Object.assign(codegenState, {
+      running: true,
+      sceneId,
+      provider: 'openai',
+      step: 'starting',
+      message: `根据对话微调 ${sceneId} Remotion 代码`,
+      startTime: Date.now(),
+      endTime: null,
+      targetFile: null,
+      error: null,
+      result: null,
+      logs: [],
+    });
+    appendCodegenLog(codegenState.message);
+    sendSse(res, 'codegen_status', {status: codegenSnapshot()});
+
+    const result = await runSceneAgent({
+      sceneId,
+      model: script.llmModel ?? null,
+      provider: 'openai',
+      repairs: 2,
+      check: true,
+      onLog: (line) => {
+        codegenState.step = 'running';
+        codegenState.message = line.replace(/^\[scene-agent\]\s*/, '');
+        appendCodegenLog(line);
+        sendSse(res, 'codegen_log', {line, status: codegenSnapshot()});
+      },
+    });
+
+    codegenState.running = false;
+    codegenState.step = 'done';
+    codegenState.message = `${sceneId} Remotion 代码已根据对话微调`;
+    codegenState.endTime = Date.now();
+    codegenState.targetFile = result.targetFile ?? null;
+    codegenState.result = result;
+    appendCodegenLog(codegenState.message);
+    await buildManifest().catch((error) => appendCodegenLog(`Manifest rebuild failed: ${error.message || error}`));
+    sendSse(res, 'codegen_done', {result, status: codegenSnapshot(), config: nextScript});
   } catch (e) {
-    sendSse(res, 'error', {error: e.message});
+    codegenState.running = false;
+    codegenState.step = 'failed';
+    codegenState.message = `${sceneId ?? 'scene'} Remotion 代码微调失败`;
+    codegenState.endTime = Date.now();
+    codegenState.error = e.message || String(e);
+    appendCodegenLog(`${codegenState.message}: ${codegenState.error}`);
+    sendSse(res, 'error', {error: codegenState.error, status: codegenSnapshot()});
   } finally {
     res.end();
   }
 });
 
 app.post('/api/scene/design', async (req, res) => {
-  const {sceneId, text, durationMs} = req.body || {};
+  const {sceneId, text, durationMs, prompt = '', currentDesignNotes = ''} = req.body || {};
   console.log(`[api/scene/design] scene=${sceneId}`);
   try {
     if (!sceneId || !text?.trim()) throw new Error('sceneId and text are required');
     const timing = await sceneTimingPrompt(sceneId);
+    const assetContext = await sceneAssetsPrompt(sceneId);
     const preciseDuration = timing.durationSeconds ?? (durationMs ? Number((durationMs / 1000).toFixed(3)) : null);
 
     const fallback = [
@@ -734,6 +874,7 @@ app.post('/api/scene/design', async (req, res) => {
       '- **动画节奏**：按实际 cue 和词块时间轴切分，不按整数秒粗切',
       '- **字幕位置**：底部居中，避免遮挡主体',
       `- **时长适配**：${preciseDuration ? `${preciseDuration}s` : '未知'}，以实际音频/字幕时间轴为准`,
+      prompt?.trim() ? `- **用户要求**：${prompt.trim()}` : '',
     ].join('\n');
 
     const apiKey = await getLlmApiKey();
@@ -743,7 +884,7 @@ app.post('/api/scene/design', async (req, res) => {
 
     const design = await llmChat(
       '你是 Remotion 视频视觉设计师。根据一段短视频文案、精确音频时长和 cue/词块时间轴，给出具体的单场景视觉设计方案。不要把时长四舍五入到整数秒；必须使用 x.x 或 x.xxx 秒和帧数来描述节奏。方案必须包含：画面基调、主体元素、色彩方案、动画节奏（百分比 + 精确秒/帧）、字幕位置、时长适配建议。请用 Markdown 输出，语言简洁专业。',
-      `sceneId: ${sceneId}\n文案: ${text}\n精确时长: ${preciseDuration ? `${preciseDuration}秒` : '未知'}\n\n对齐后的字幕/词块时间轴:\n${timing.summary}`,
+      `sceneId: ${sceneId}\n文案: ${text}\n用户设计要求: ${prompt || '(empty)'}\n当前设计方案: ${currentDesignNotes || '(empty)'}\n精确时长: ${preciseDuration ? `${preciseDuration}秒` : '未知'}\n\nImage assets and visual references:\n${assetContext}\n\n对齐后的字幕/词块时间轴:\n${timing.summary}`,
     );
     res.json({success: true, design: design || fallback, provider: 'openai'});
   } catch (e) {
@@ -752,7 +893,7 @@ app.post('/api/scene/design', async (req, res) => {
 });
 
 app.post('/api/scene/design/stream', async (req, res) => {
-  const {sceneId, text, durationMs} = req.body || {};
+  const {sceneId, text, durationMs, prompt = '', currentDesignNotes = ''} = req.body || {};
   console.log(`[api/scene/design/stream] scene=${sceneId}`);
   res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
@@ -762,6 +903,7 @@ app.post('/api/scene/design/stream', async (req, res) => {
   try {
     if (!sceneId || !text?.trim()) throw new Error('sceneId and text are required');
     const timing = await sceneTimingPrompt(sceneId);
+    const assetContext = await sceneAssetsPrompt(sceneId);
     const preciseDuration = timing.durationSeconds ?? (durationMs ? Number((durationMs / 1000).toFixed(3)) : null);
 
     const fallback = [
@@ -773,12 +915,13 @@ app.post('/api/scene/design/stream', async (req, res) => {
       '- **动画节奏**：按实际 cue 和词块时间轴切分，不按整数秒粗切',
       '- **字幕位置**：底部居中，避免遮挡主体',
       `- **时长适配**：${preciseDuration ? `${preciseDuration}s` : '未知'}，以实际音频/字幕时间轴为准`,
+      prompt?.trim() ? `- **用户要求**：${prompt.trim()}` : '',
     ].join('\n');
 
     await streamLlmChat(res, {
       fallback,
-      system: '你是 Remotion 视频视觉设计师。根据一段短视频文案、精确音频时长和 cue/词块时间轴，给出具体的单场景视觉设计方案。不要把时长四舍五入到整数秒；必须使用 x.x 或 x.xxx 秒和帧数来描述节奏。方案必须包含：画面基调、主体元素、色彩方案、动画节奏（百分比 + 精确秒/帧）、字幕位置、时长适配建议。请用 Markdown 输出，语言简洁专业。',
-      user: `sceneId: ${sceneId}\n文案: ${text}\n精确时长: ${preciseDuration ? `${preciseDuration}秒` : '未知'}\n\n对齐后的字幕/词块时间轴:\n${timing.summary}`,
+      system: '你是 Remotion 视频视觉设计师。根据用户设计要求、图片角色、短视频文案、精确音频时长和 cue/词块时间轴，给出具体的单场景视觉设计方案。不要把时长四舍五入到整数秒；必须使用 x.x 或 x.xxx 秒和帧数来描述节奏。方案必须明确说明哪些图片只作 reference，哪些图片作为 render 素材进入画面。方案必须包含：画面基调、主体元素、图片使用策略、色彩方案、动画节奏（百分比 + 精确秒/帧）、字幕位置、时长适配建议。请用 Markdown 输出，语言简洁专业。',
+      user: `sceneId: ${sceneId}\n文案: ${text}\n用户设计要求: ${prompt || '(empty)'}\n当前设计方案: ${currentDesignNotes || '(empty)'}\n精确时长: ${preciseDuration ? `${preciseDuration}秒` : '未知'}\n\nImage assets and visual references:\n${assetContext}\n\n对齐后的字幕/词块时间轴:\n${timing.summary}`,
     });
   } catch (e) {
     sendSse(res, 'error', {error: e.message});
@@ -792,7 +935,7 @@ app.get('/api/scene/codegen/status', (req, res) => {
 });
 
 app.post('/api/scene/codegen', async (req, res) => {
-  const {sceneId, model = null, provider = null, cliCommand = null, repairs = 2, check = true} = req.body || {};
+  const {sceneId, model = null, repairs = 2, check = true} = req.body || {};
   console.log(`[api/scene/codegen] scene=${sceneId}`);
   if (codegenState.running) {
     return res.status(409).json({error: 'Scene code generation is already running', status: codegenSnapshot()});
@@ -800,7 +943,7 @@ app.post('/api/scene/codegen', async (req, res) => {
 
   try {
     if (!sceneId || !/^scene\d+$/i.test(sceneId)) throw new Error('sceneId is required');
-    await findScene(sceneId);
+    const {script} = await findScene(sceneId);
     const captions = await captionData(sceneId);
     if (!captions?.durationInFrames || !Array.isArray(captions.cues) || captions.cues.length === 0) {
       throw new Error(`${sceneId} has no usable alignment. Run ASR/time alignment before generating Remotion code.`);
@@ -810,7 +953,7 @@ app.post('/api/scene/codegen', async (req, res) => {
     Object.assign(codegenState, {
       running: true,
       sceneId,
-      provider,
+      provider: 'openai',
       step: 'starting',
       message: `准备生成 ${sceneId} Remotion 代码`,
       startTime: Date.now(),
@@ -825,8 +968,7 @@ app.post('/api/scene/codegen', async (req, res) => {
     runSceneAgent({
       sceneId,
       model,
-      provider,
-      cliCommand,
+      provider: 'openai',
       repairs: repairAttempts,
       check: check !== false,
       onLog: (line) => {

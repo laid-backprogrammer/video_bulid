@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {readJsonFile} from './json-utils.mjs';
+import {buildSceneAssetsMarkdown, normalizeSceneAssets} from './scene-assets.mjs';
 
 const ROOT = process.cwd();
 const SCRIPT_PATH = path.join(ROOT, 'src/composer/script.json');
@@ -101,6 +102,11 @@ export async function buildSceneCodegenContext(sceneId) {
   const captions = await readJsonFile(path.join(ROOT, captionsRel)).catch(() => null);
   const generatedSceneRel = `src/scenes/generated/Scene${number}.generated.tsx`;
   const briefColors = extractHexColors([scene.designNotes, scene.tuningNotes].filter(Boolean).join('\n'));
+  const sceneAssets = normalizeSceneAssets(scene.assets, {
+    includeStaticFilePath: true,
+    includeAbsolutePath: true,
+    root: ROOT,
+  });
   const skillSummary = selectedRuleFiles.map((file) => `- ${file}`).join('\n');
   const cueTimelineMarkdown = buildCueTimelineMarkdown(captions?.cues ?? [], fps);
 
@@ -129,6 +135,7 @@ export async function buildSceneCodegenContext(sceneId) {
       designNotes: scene.designNotes ?? '',
       tuningNotes: scene.tuningNotes ?? '',
       briefColors,
+      assets: sceneAssets,
     },
     alignment: captions ? {
       audioFile: captions.audioFile,
@@ -147,9 +154,10 @@ export async function buildSceneCodegenContext(sceneId) {
     'Use the provided context in this exact priority order:',
     '1. `scene.designNotes` visual brief',
     '2. `scene.tuningNotes` fine-tuning instructions',
-    '3. Timestamped captions in `alignment.cues[].words[]`',
-    '4. File contract, available imports, and local references',
-    '5. Skill rule files as an implementation cookbook',
+    '3. `scene.assets` user images, separated into render materials and visual references',
+    '4. Timestamped captions in `alignment.cues[].words[]`',
+    '5. File contract, available imports, and local references',
+    '6. Skill rule files as an implementation cookbook',
     '',
     'You are editing one Remotion scene only. Follow the file/interface contract and preserve the exported component name.',
     '',
@@ -158,6 +166,7 @@ export async function buildSceneCodegenContext(sceneId) {
     'The creative brief in scene.designNotes and scene.tuningNotes is primary. Translate it into bespoke Remotion visuals, not a generic title/caption template.',
     'Treat this as a fresh design pass driven by the brief and aligned captions, not as an incremental edit of a pre-existing generic layout.',
     'Use the included skill rules as an effects cookbook. Pick animation, text reveal, transition, chart/diagram, shape, or asset patterns that match the brief. Do not copy package imports from examples unless the package exists in package.json.',
+    'Use `render` images as visible Remotion materials only when they support the scene. Use `reference` images only to match visual direction; do not place reference-only images into the rendered frame. Use `both` images for either purpose.',
     'Scene length and cue count vary. Do not assume the scene is short, do not assume there are only one or two cues, and do not build a first-sentence-only intro. The main visual timeline must respond to every cue in Task JSON.',
     'Do not hard-code narration text, fixed cue title arrays, or fixed sentence arrays. Derive displayed narration and beat state from cues/cue.text/cue.words at runtime. Generic colors, shapes, and layout constants are fine.',
     '',
@@ -167,6 +176,7 @@ export async function buildSceneCodegenContext(sceneId) {
     fenced('Scene Narration (Primary)', 'text', scene.text || '(empty)'),
     fenced('Visual Design Brief (Primary)', 'md', scene.designNotes || 'No design notes provided.'),
     fenced('Fine-tuning Notes (Primary)', 'md', scene.tuningNotes || 'No tuning notes provided.'),
+    fenced('User Image Assets and Visual References (Primary)', 'md', buildSceneAssetsMarkdown(sceneAssets, {root: ROOT})),
     fenced('Timestamped Subtitle Timeline (Primary)', 'md', cueTimelineMarkdown),
     fenced('Skills Included', 'md', skillSummary),
     fenced('Task JSON', 'json', JSON.stringify(context, null, 2)),

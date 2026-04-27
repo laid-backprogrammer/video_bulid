@@ -23,14 +23,20 @@ import {
   Scene8Generated,
 } from './scenes/generated';
 import {CaptionOverlay} from './components/Captions';
-import type {AgentDiscussionProps, SceneData} from './types';
+import type {AgentDiscussionProps, SceneAsset, SceneData} from './types';
 
 const FPS = 30;
 const TRANSITION_DURATION = 15;
 const SCENE_TAIL_PADDING = FPS;
 const MIN_SCENE_DURATION = TRANSITION_DURATION + 1;
 
-const SCENE_COMPONENTS: Record<string, React.FC<{cues: SceneData['cues']; durationInFrames: number}>> = {
+type SceneComponentProps = {
+  cues: SceneData['cues'];
+  durationInFrames: number;
+  assets?: SceneAsset[];
+};
+
+const SCENE_COMPONENTS: Record<string, React.ComponentType<SceneComponentProps>> = {
   scene1: Scene1Generated,
   scene2: Scene2Generated,
   scene3: Scene3Generated,
@@ -52,14 +58,14 @@ const TRANSITIONS = [
 ];
 
 const fallbackScenes: SceneData[] = [
-  {id: 'scene1', text: '', audioFile: '', captionsFile: '', durationInFrames: 4 * FPS, cues: []},
-  {id: 'scene2', text: '', audioFile: '', captionsFile: '', durationInFrames: 5 * FPS, cues: []},
-  {id: 'scene3', text: '', audioFile: '', captionsFile: '', durationInFrames: 5 * FPS, cues: []},
-  {id: 'scene4', text: '', audioFile: '', captionsFile: '', durationInFrames: 4 * FPS, cues: []},
-  {id: 'scene5', text: '', audioFile: '', captionsFile: '', durationInFrames: 6 * FPS, cues: []},
-  {id: 'scene6', text: '', audioFile: '', captionsFile: '', durationInFrames: 5 * FPS, cues: []},
-  {id: 'scene7', text: '', audioFile: '', captionsFile: '', durationInFrames: 5 * FPS, cues: []},
-  {id: 'scene8', text: '', audioFile: '', captionsFile: '', durationInFrames: 6 * FPS, cues: []},
+  {id: 'scene1', text: '', audioFile: '', captionsFile: '', durationInFrames: 4 * FPS, cues: [], assets: []},
+  {id: 'scene2', text: '', audioFile: '', captionsFile: '', durationInFrames: 5 * FPS, cues: [], assets: []},
+  {id: 'scene3', text: '', audioFile: '', captionsFile: '', durationInFrames: 5 * FPS, cues: [], assets: []},
+  {id: 'scene4', text: '', audioFile: '', captionsFile: '', durationInFrames: 4 * FPS, cues: [], assets: []},
+  {id: 'scene5', text: '', audioFile: '', captionsFile: '', durationInFrames: 6 * FPS, cues: [], assets: []},
+  {id: 'scene6', text: '', audioFile: '', captionsFile: '', durationInFrames: 5 * FPS, cues: [], assets: []},
+  {id: 'scene7', text: '', audioFile: '', captionsFile: '', durationInFrames: 5 * FPS, cues: [], assets: []},
+  {id: 'scene8', text: '', audioFile: '', captionsFile: '', durationInFrames: 6 * FPS, cues: [], assets: []},
 ];
 
 const normalizeScenes = (scenes: SceneData[] | undefined): SceneData[] => {
@@ -72,6 +78,7 @@ const normalizeScenes = (scenes: SceneData[] | undefined): SceneData[] => {
     audioFile: scene.audioFile ?? '',
     captionsFile: scene.captionsFile ?? '',
     cues: scene.cues ?? [],
+    assets: scene.assets ?? [],
     durationInFrames: Math.max(
       MIN_SCENE_DURATION,
       Math.ceil(Number(scene.durationInFrames) || 0),
@@ -84,14 +91,16 @@ const getTotalDuration = (scenes: SceneData[]) => {
   return Math.max(1, sceneFrames + Math.max(0, scenes.length - 1) * TRANSITION_DURATION);
 };
 
+const publicAssetPath = (file: string) => file.replace(/^public[\\/]/, '').replace(/\\/g, '/');
+
 const renderScene = (scene: SceneData) => {
   const Component = SCENE_COMPONENTS[scene.id];
   if (!Component) return null;
 
   return (
     <>
-      <Component cues={scene.cues} durationInFrames={scene.durationInFrames} />
-      {scene.audioFile ? <Audio src={staticFile(scene.audioFile.replace(/^public[\\/]/, '').replace(/\\/g, '/'))} /> : null}
+      <Component cues={scene.cues} durationInFrames={scene.durationInFrames} assets={scene.assets ?? []} />
+      {scene.audioFile ? <Audio src={staticFile(publicAssetPath(scene.audioFile))} /> : null}
       <CaptionOverlay cues={scene.cues} />
     </>
   );
