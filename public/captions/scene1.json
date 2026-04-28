@@ -1,7 +1,7 @@
 {
   "id": "scene1",
   "text": "这是我新开发的一个日程管理工具",
-  "audioFile": "public/voiceover/scene1.1777294900380.mp3",
+  "audioFile": "public\\voiceover\\scene1.1777294900380.mp3",
   "durationInFrames": 114,
   "cues": [
     {
@@ -49,7 +49,7 @@
       "emphasis": []
     }
   ],
-  "alignedAt": "2026-04-27T13:02:01.281Z",
+  "alignedAt": "2026-04-27T16:49:52.570Z",
   "alignmentSource": "estimated",
   "wordCount": 7,
   "wordTimingSource": "estimated"

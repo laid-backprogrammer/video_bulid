@@ -1,8 +1,10 @@
 export type SceneAssetRole = 'render' | 'reference' | 'both';
+export type SceneAssetType = 'image' | 'video' | 'audio';
 
 export type ScriptScene = {
   id: string;
   text: string;
+  enabled?: boolean;
   tuningNotes?: string;
   designNotes?: string;
   assets?: SceneAsset[];
@@ -12,6 +14,8 @@ export type SceneAsset = {
   id: string;
   name: string;
   file: string;
+  assetType?: SceneAssetType | string;
+  alias?: string;
   role?: SceneAssetRole | string;
   notes?: string;
   mimeType?: string;
@@ -20,13 +24,42 @@ export type SceneAsset = {
   url?: string;
 };
 
+export type SceneAssetDraft = {
+  id: string;
+  file: File;
+  assetType: SceneAssetType;
+  alias: string;
+  role: SceneAssetRole;
+  notes: string;
+};
+
 export type SceneItem = ScriptScene & {
   audioExists: boolean;
   captionExists: boolean;
+  includedInVideo?: boolean;
   durationMs: number | null;
+  durationInFrames?: number | null;
+  audioFile?: string;
+  captionsFile?: string;
+  cues?: SegmentCue[];
   audioUrl: string | null;
   captionsUrl: string | null;
   assets?: SceneAsset[];
+};
+
+export type WordCue = {
+  text: string;
+  startFrame: number;
+  endFrame: number;
+};
+
+export type SegmentCue = {
+  id: string;
+  text: string;
+  startFrame: number;
+  endFrame: number;
+  words: WordCue[];
+  rawWords?: WordCue[];
 };
 
 export type Config = {
@@ -75,6 +108,7 @@ export type RenderStatus = {
   error: string | null;
   videoUrl: string | null;
   videoExists: boolean;
+  previewVideos?: Record<string, {outputFile: string; videoUrl: string; mtimeMs: number | null}>;
 };
 
 export type WorkflowStep = 'script' | 'audio' | 'design' | 'preview' | 'render';

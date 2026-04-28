@@ -2,15 +2,12 @@ import React from 'react';
 import {
   Composition,
   AbsoluteFill,
-  Sequence,
   staticFile,
   Audio,
   CalculateMetadataFunction,
 } from 'remotion';
 import {TransitionSeries, linearTiming} from '@remotion/transitions';
 import {fade} from '@remotion/transitions/fade';
-import {slide} from '@remotion/transitions/slide';
-import {wipe} from '@remotion/transitions/wipe';
 
 import {
   Scene1Generated,
@@ -27,8 +24,8 @@ import type {AgentDiscussionProps, SceneAsset, SceneData} from './types';
 
 const FPS = 30;
 const TRANSITION_DURATION = 15;
-const SCENE_TAIL_PADDING = FPS;
 const MIN_SCENE_DURATION = TRANSITION_DURATION + 1;
+const transitionTiming = linearTiming({durationInFrames: TRANSITION_DURATION});
 
 type SceneComponentProps = {
   cues: SceneData['cues'];
@@ -47,16 +44,6 @@ const SCENE_COMPONENTS: Record<string, React.ComponentType<SceneComponentProps>>
   scene8: Scene8Generated,
 };
 
-const TRANSITIONS = [
-  fade(),
-  wipe({direction: 'from-top'}),
-  fade(),
-  slide({direction: 'from-right'}),
-  fade(),
-  wipe({direction: 'from-bottom'}),
-  fade(),
-];
-
 const fallbackScenes: SceneData[] = [
   {id: 'scene1', text: '', audioFile: '', captionsFile: '', durationInFrames: 4 * FPS, cues: [], assets: []},
   {id: 'scene2', text: '', audioFile: '', captionsFile: '', durationInFrames: 5 * FPS, cues: [], assets: []},
@@ -73,7 +60,7 @@ const normalizeScenes = (scenes: SceneData[] | undefined): SceneData[] => {
     return fallbackScenes;
   }
 
-  return scenes.map((scene) => ({
+  return scenes.filter((scene) => scene.enabled !== false && scene.text.trim()).map((scene) => ({
     ...scene,
     audioFile: scene.audioFile ?? '',
     captionsFile: scene.captionsFile ?? '',
@@ -88,7 +75,7 @@ const normalizeScenes = (scenes: SceneData[] | undefined): SceneData[] => {
 
 const getTotalDuration = (scenes: SceneData[]) => {
   const sceneFrames = scenes.reduce((sum, scene) => sum + scene.durationInFrames, 0);
-  return Math.max(1, sceneFrames + Math.max(0, scenes.length - 1) * TRANSITION_DURATION);
+  return Math.max(1, sceneFrames - Math.max(0, scenes.length - 1) * TRANSITION_DURATION);
 };
 
 const publicAssetPath = (file: string) => file.replace(/^public[\\/]/, '').replace(/\\/g, '/');
@@ -109,22 +96,25 @@ const renderScene = (scene: SceneData) => {
 export const AgentDiscussion: React.FC<AgentDiscussionProps> = ({scenes, fps}) => {
   return (
     <AbsoluteFill>
-      {scenes.map((scene, index) => {
-        if (!SCENE_COMPONENTS[scene.id]) return null;
+      <TransitionSeries>
+        {scenes.map((scene, index) => {
+          if (!SCENE_COMPONENTS[scene.id]) return null;
 
-        const startFrame = scenes.slice(0, index).reduce((sum, s) => sum + s.durationInFrames, 0) + index * TRANSITION_DURATION;
-
-        return (
-          <Sequence
-            key={scene.id}
-            from={startFrame}
-            durationInFrames={scene.durationInFrames}
-            layout="none"
-          >
-            {renderScene(scene)}
-          </Sequence>
-        );
-      })}
+          return (
+            <React.Fragment key={scene.id}>
+              <TransitionSeries.Sequence durationInFrames={scene.durationInFrames}>
+                {renderScene(scene)}
+              </TransitionSeries.Sequence>
+              {index < scenes.length - 1 ? (
+                <TransitionSeries.Transition
+                  presentation={fade()}
+                  timing={transitionTiming}
+                />
+              ) : null}
+            </React.Fragment>
+          );
+        })}
+      </TransitionSeries>
     </AbsoluteFill>
   );
 };
@@ -169,7 +159,7 @@ export const calculatePreviewMetadata: CalculateMetadataFunction<{sceneId: strin
   } catch {
     const scene = fallbackScenes.find((item) => item.id === props.sceneId) ?? fallbackScenes[0];
     return {
-      durationInFrames: scene.durationInFrames + SCENE_TAIL_PADDING,
+      durationInFrames: scene.durationInFrames,
       props: {sceneId: scene.id, scenes: [scene], fps: FPS},
     };
   }

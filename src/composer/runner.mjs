@@ -14,7 +14,8 @@ import {readJsonFile} from './json-utils.mjs';
 
 const SCRIPT_PATH = 'src/composer/script.json';
 const OUT_DIR = 'public';
-const SCENE_TAIL_PADDING_SECONDS = 1;
+const SCENE_TAIL_PADDING_SECONDS = 0.2;
+const isSceneIncludedInVideo = (scene) => scene?.enabled !== false && String(scene?.text ?? '').trim().length > 0;
 
 // 全局进度状态（供外部查询）
 export const globalState = {
@@ -99,10 +100,12 @@ export function subscribe(cb) {
   return () => globalState.listeners.delete(cb);
 }
 
-export async function runPipeline(targetSceneId = null) {
+export async function runPipeline(targetSceneId = null, options = {}) {
   if (globalState.running) {
     throw new Error('已有 Pipeline 在运行中');
   }
+
+  const forceTts = Boolean(options.forceTts ?? options.force ?? false);
 
   globalState.running = true;
   globalState.jobId = `${Date.now()}`;
@@ -113,12 +116,14 @@ export async function runPipeline(targetSceneId = null) {
 
   try {
     const script = await readJsonFile(SCRIPT_PATH);
-    const scenes = script.scenes
-      .filter((s) => !targetSceneId || s.id === targetSceneId)
+    const sourceScenes = targetSceneId
+      ? script.scenes.filter((s) => s.id === targetSceneId)
+      : script.scenes.filter(isSceneIncludedInVideo);
+    const scenes = sourceScenes
       .map((s) => ({...s, step: 'pending', status: 'pending', error: null, audioFile: null, captionsFile: null, durationInFrames: null}));
 
     globalState.scenes = scenes;
-    log(`🚀 Pipeline 启动${targetSceneId ? ` (目标: ${targetSceneId})` : ''}，共 ${scenes.length} 个场景`);
+    log(`🚀 Pipeline 启动${targetSceneId ? ` (目标: ${targetSceneId})` : ''}，共 ${scenes.length} 个场景，TTS=${forceTts ? '重新生成' : '复用已有音频'}`);
 
     for (let i = 0; i < scenes.length; i++) {
       const scene = scenes[i];
@@ -132,7 +137,7 @@ export async function runPipeline(targetSceneId = null) {
 
       // TTS
       try {
-        const latestAudioFile = await latestSceneAudio(scene.id);
+        const latestAudioFile = forceTts ? null : await latestSceneAudio(scene.id);
         const audioFile = latestAudioFile ?? defaultSceneAudioFile(scene.id);
 
         if (latestAudioFile) {
@@ -213,7 +218,8 @@ export async function runPipeline(targetSceneId = null) {
     );
 
     // 合并：保留未在本次处理范围内的旧场景，用新结果覆盖处理过的场景
-    const mergedScenes = script.scenes.map((scene) => {
+    const manifestScenes = script.scenes.filter(isSceneIncludedInVideo);
+    const mergedScenes = manifestScenes.map((scene) => {
       if (processedMap.has(scene.id)) return processedMap.get(scene.id);
       const old = existingScenes.find((s) => s.id === scene.id);
       if (old) return old;

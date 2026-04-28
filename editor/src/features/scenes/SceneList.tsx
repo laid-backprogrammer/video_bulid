@@ -10,10 +10,11 @@ export function SceneList({
   pipeline,
   selectedId,
   step,
-  anyRunning,
+  actionLocks,
   ttsStatus,
   codegen,
   onSelect,
+  onSetSceneEnabled,
   onUpdateSceneText,
   onRunTts,
   onRunAsr,
@@ -28,10 +29,18 @@ export function SceneList({
   pipeline: PipelineStatus | null;
   selectedId: string;
   step: WorkflowStep;
-  anyRunning: boolean;
+  actionLocks: {
+    audio: boolean;
+    pipeline: boolean;
+    design: boolean;
+    codegen: boolean;
+    render: boolean;
+    tune: boolean;
+  };
   ttsStatus: TtsStatus | null;
   codegen: CodegenStatus | null;
   onSelect: (sceneId: string) => void;
+  onSetSceneEnabled: (sceneId: string, enabled: boolean) => void;
   onUpdateSceneText: (sceneId: string, text: string) => void;
   onRunTts: (sceneId: string, force: boolean) => void;
   onRunAsr: (sceneId: string) => void;
@@ -68,6 +77,15 @@ export function SceneList({
                 <span style={pillStyle(status?.audioExists, status?.captionExists)}>
                   {status?.audioExists && status?.captionExists ? '可预览' : status?.audioExists ? '待对齐' : '待语音'}
                 </span>
+                <label style={includeToggleStyle} onClick={(event) => event.stopPropagation()}>
+                  <input
+                    type="checkbox"
+                    checked={scene.enabled !== false}
+                    disabled={actionLocks.pipeline || actionLocks.render}
+                    onChange={(event) => onSetSceneEnabled(scene.id, event.target.checked)}
+                  />
+                  成片
+                </label>
               </div>
               <div style={{display: 'flex', alignItems: 'center', gap: 8}}>
                 <StepDots progress={progress} />
@@ -104,33 +122,33 @@ export function SceneList({
             <div style={actionRowStyle}>
               {step === 'audio' ? (
                 <>
-                  <MiniBtn disabled={anyRunning} onClick={() => onRunTts(scene.id, Boolean(status?.audioExists))}>
+                  <MiniBtn disabled={actionLocks.audio} onClick={() => onRunTts(scene.id, Boolean(status?.audioExists))}>
                     {status?.audioExists ? '重新生成语音' : '生成语音'}
                   </MiniBtn>
-                  <MiniBtn disabled={anyRunning || !status?.audioExists} onClick={() => onRunAsr(scene.id)}>
+                  <MiniBtn disabled={actionLocks.audio || !status?.audioExists} onClick={() => onRunAsr(scene.id)}>
                     对齐时间轴
                   </MiniBtn>
-                  <MiniBtn disabled={anyRunning} onClick={() => onRunScenePipeline(scene.id)}>
-                    本段全流程
+                  <MiniBtn disabled={actionLocks.pipeline} onClick={() => onRunScenePipeline(scene.id)}>
+                    重做本段全流程
                   </MiniBtn>
                 </>
               ) : null}
               {step === 'design' ? (
                 <>
-                  <MiniBtn disabled={anyRunning} onClick={() => onOpenDesign(scene.id)}>
+                  <MiniBtn disabled={actionLocks.design} onClick={() => onOpenDesign(scene.id)}>
                     {scene.designNotes ? '重新设计' : '生成设计方案'}
                   </MiniBtn>
-                  <MiniBtn disabled={anyRunning || !status?.captionExists} onClick={() => onRunSceneCodegen(scene.id)}>
+                  <MiniBtn disabled={actionLocks.codegen || !status?.captionExists} onClick={() => onRunSceneCodegen(scene.id)}>
                     生成 Remotion 代码
                   </MiniBtn>
                 </>
               ) : null}
               {step === 'preview' ? (
                 <>
-                  <MiniBtn disabled={anyRunning || !status?.audioExists} onClick={() => onRenderScenePreview(scene.id)}>
+                  <MiniBtn disabled={actionLocks.render || !status?.audioExists} onClick={() => onRenderScenePreview(scene.id)}>
                     渲染本段预览
                   </MiniBtn>
-                  <MiniBtn disabled={anyRunning} onClick={() => onOpenTune(scene.id)}>
+                  <MiniBtn disabled={actionLocks.tune} onClick={() => onOpenTune(scene.id)}>
                     LLM 微调
                   </MiniBtn>
                 </>
@@ -178,6 +196,7 @@ const textareaStyle: CSSProperties = {
   fontSize: 14,
 };
 const actionRowStyle: CSSProperties = {display: 'flex', gap: 8, flexWrap: 'wrap', padding: '0 14px 12px'};
+const includeToggleStyle: CSSProperties = {display: 'inline-flex', alignItems: 'center', gap: 5, color: '#9fb3c8', fontSize: 12, cursor: 'pointer'};
 
 function pillStyle(audio = false, caption = false): CSSProperties {
   const color = audio && caption ? '#50fa7b' : audio ? '#ffb86c' : '#ff6b6b';

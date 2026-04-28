@@ -1,160 +1,26 @@
 {
   "id": "scene3",
-  "text": "但我自己做 AI 工具落地之后，越来越觉得一个更实际的问题是：",
+  "text": "你好你好",
   "audioFile": "public\\voiceover\\scene3.mp3",
   "durationInFrames": 166,
   "cues": [
     {
       "id": "cue-1",
       "startFrame": 0,
-      "endFrame": 77,
-      "text": "但我自己做 AI 工具落地之后",
-      "words": [
-        {
-          "text": "但",
-          "startFrame": 0,
-          "endFrame": 6
-        },
-        {
-          "text": "我",
-          "startFrame": 6,
-          "endFrame": 12
-        },
-        {
-          "text": "自",
-          "startFrame": 12,
-          "endFrame": 19
-        },
-        {
-          "text": "己",
-          "startFrame": 19,
-          "endFrame": 25
-        },
-        {
-          "text": "做",
-          "startFrame": 25,
-          "endFrame": 32
-        },
-        {
-          "text": "AI",
-          "startFrame": 32,
-          "endFrame": 38
-        },
-        {
-          "text": "工",
-          "startFrame": 38,
-          "endFrame": 44
-        },
-        {
-          "text": "具",
-          "startFrame": 44,
-          "endFrame": 51
-        },
-        {
-          "text": "落",
-          "startFrame": 51,
-          "endFrame": 57
-        },
-        {
-          "text": "地",
-          "startFrame": 57,
-          "endFrame": 64
-        },
-        {
-          "text": "之",
-          "startFrame": 64,
-          "endFrame": 70
-        },
-        {
-          "text": "后",
-          "startFrame": 70,
-          "endFrame": 77
-        }
-      ],
-      "emphasis": []
-    },
-    {
-      "id": "cue-2",
-      "startFrame": 77,
       "endFrame": 166,
-      "text": "越来越觉得一个更实际的问题是：",
+      "text": "你好你好",
       "words": [
         {
-          "text": "越",
-          "startFrame": 77,
-          "endFrame": 83
-        },
-        {
-          "text": "来",
-          "startFrame": 83,
-          "endFrame": 89
-        },
-        {
-          "text": "越",
-          "startFrame": 89,
-          "endFrame": 96
-        },
-        {
-          "text": "觉",
-          "startFrame": 96,
-          "endFrame": 102
-        },
-        {
-          "text": "得",
-          "startFrame": 102,
-          "endFrame": 108
-        },
-        {
-          "text": "一",
-          "startFrame": 108,
-          "endFrame": 115
-        },
-        {
-          "text": "个",
-          "startFrame": 115,
-          "endFrame": 121
-        },
-        {
-          "text": "更",
-          "startFrame": 121,
-          "endFrame": 127
-        },
-        {
-          "text": "实",
-          "startFrame": 127,
-          "endFrame": 134
-        },
-        {
-          "text": "际",
-          "startFrame": 134,
-          "endFrame": 140
-        },
-        {
-          "text": "的",
-          "startFrame": 140,
-          "endFrame": 146
-        },
-        {
-          "text": "问",
-          "startFrame": 146,
-          "endFrame": 153
-        },
-        {
-          "text": "题",
-          "startFrame": 153,
-          "endFrame": 159
-        },
-        {
-          "text": "是",
-          "startFrame": 159,
+          "text": "你好你好",
+          "startFrame": 0,
           "endFrame": 166
         }
       ],
       "emphasis": []
     }
   ],
-  "alignedAt": "2026-04-26T02:34:42.753Z",
+  "alignedAt": "2026-04-27T16:48:39.883Z",
   "alignmentSource": "estimated",
-  "wordCount": 26,
+  "wordCount": 1,
   "wordTimingSource": "estimated"
 }

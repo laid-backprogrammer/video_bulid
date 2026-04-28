@@ -1,0 +1,12 @@
+{
+  "intent": "Soft project-level visual continuity for all generated scenes.",
+  "strength": "soft",
+  "theme": "modern dark tech explainer with product/UI clarity",
+  "palette": ["#070B18", "#101B3F", "#24124A", "#7DB7FF", "#F8FAFC"],
+  "typography": "clean modern sans; strong but not decorative; CJK-friendly",
+  "subtitles": "bottom-safe, high contrast, word highlights allowed; prioritize readability over ornament",
+  "motion": "frame-driven Remotion animation; soft push, glow pulse, measured transitions",
+  "continuity": ["dark depth", "blue/cyan/purple accents", "glass or interface surfaces", "clear focal hierarchy"],
+  "freedom": "Scene briefs, user tuning, and uploaded references may override this guide when needed.",
+  "avoid": ["one-note monochrome", "unrelated cartoon styling", "busy decoration that competes with captions"]
+}

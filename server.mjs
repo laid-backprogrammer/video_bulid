@@ -17,7 +17,7 @@ import {
   normalizeSceneAssets,
   SCENE_ASSET_PUBLIC_DIR,
   sceneAssetsForStorage,
-  validateSceneImageFile,
+  validateSceneAssetFile,
 } from './src/composer/scene-assets.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -31,7 +31,7 @@ const PUBLIC_DIR = path.join(__dirname, 'public');
 const OUTPUT_DIR = path.join(__dirname, 'output');
 const SCENE_ASSET_DIR = path.join(__dirname, SCENE_ASSET_PUBLIC_DIR);
 const editorDist = path.join(__dirname, 'editor/dist');
-const SCENE_TAIL_PADDING_SECONDS = 1;
+const SCENE_TAIL_PADDING_SECONDS = 0.2;
 
 const renderState = {
   running: false,
@@ -137,6 +137,32 @@ async function outputExists(filePath) {
   return fs.access(path.join(__dirname, filePath)).then(() => true).catch(() => false);
 }
 
+async function listPreviewVideos() {
+  let entries;
+  try {
+    entries = await fs.readdir(OUTPUT_DIR, {withFileTypes: true});
+  } catch (e) {
+    if (e.code === 'ENOENT') return {};
+    throw e;
+  }
+
+  const previews = {};
+  await Promise.all(entries.map(async (entry) => {
+    if (!entry.isFile()) return;
+    const match = entry.name.match(/^(scene\d+)\.preview\.mp4$/i);
+    if (!match) return;
+    const sceneId = match[1];
+    const outputFile = rel('output', entry.name);
+    const stat = await fs.stat(path.join(OUTPUT_DIR, entry.name)).catch(() => null);
+    previews[sceneId] = {
+      outputFile,
+      videoUrl: `/${outputFile}?t=${Math.round(stat?.mtimeMs ?? Date.now())}`,
+      mtimeMs: stat?.mtimeMs ?? null,
+    };
+  }));
+  return previews;
+}
+
 const rel = (...parts) => path.join(...parts).replace(/\\/g, '/');
 const exists = async (filePath) => fs.access(filePath).then(() => true).catch(() => false);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -144,6 +170,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const defaultSceneAudioFile = (sceneId) => rel('public', 'voiceover', `${sceneId}.mp3`);
 const versionedSceneAudioFile = (sceneId) => rel('public', 'voiceover', `${sceneId}.${Date.now()}.mp3`);
 const audioUrl = (audioFile) => `/${audioFile.replace(/\\/g, '/')}`;
+const isSceneIncludedInVideo = (scene) => scene?.enabled !== false && String(scene?.text ?? '').trim().length > 0;
 
 const isSceneAudioFile = (sceneId, fileName) => (
   fileName === `${sceneId}.mp3`
@@ -204,9 +231,9 @@ async function buildManifest() {
   const script = await readScript();
   const scenes = [];
 
-  for (const scene of script.scenes) {
+  for (const scene of script.scenes.filter(isSceneIncludedInVideo)) {
     const audio = await latestSceneAudio(scene.id);
-    const audioFile = audio?.relPath ?? defaultSceneAudioFile(scene.id);
+    const audioFile = audio?.relPath ?? '';
     const captionsFile = rel('public', 'captions', `${scene.id}.json`);
     const captionPath = path.join(__dirname, captionsFile);
     const cap = (await exists(captionPath)) ? await readJsonFile(captionPath) : null;
@@ -224,6 +251,7 @@ async function buildManifest() {
         durationInFrames,
         cues: cap?.cues ?? [],
         assets: normalizeSceneAssets(scene.assets),
+        enabled: scene.enabled !== false,
       });
     }
   }
@@ -242,11 +270,19 @@ async function getScenesStatus() {
     const captionExists = await exists(captionPath);
     const cap = captionExists ? await readJsonFile(captionPath).catch(() => null) : null;
     const durationMs = cap?.durationInFrames ? Math.round((cap.durationInFrames / script.fps) * 1000) : null;
+    const audioFile = audio?.relPath ?? '';
+    const captionsFile = rel('public', 'captions', `${scene.id}.json`);
     return {
       ...scene,
+      enabled: scene.enabled !== false,
+      includedInVideo: isSceneIncludedInVideo(scene),
       audioExists,
       captionExists,
       durationMs,
+      durationInFrames: cap?.durationInFrames ?? null,
+      audioFile,
+      captionsFile: captionExists ? captionsFile : '',
+      cues: cap?.cues ?? [],
       audioUrl: audio ? audioUrl(audio.relPath) : null,
       captionsUrl: captionExists ? `/public/captions/${scene.id}.json` : null,
       designNotes: scene.designNotes || '',
@@ -298,10 +334,15 @@ const sceneTimingPrompt = async (sceneId) => {
   };
 };
 
-const sceneAssetsPrompt = async (sceneId) => {
+const sceneAssetsPrompt = async (sceneId, mentionText = '') => {
   const {scene} = await findScene(sceneId);
-  return buildSceneAssetsMarkdown(scene.assets);
+  return buildSceneAssetsMarkdown(scene.assets, {
+    mentionText,
+    requireMention: true,
+  });
 };
+
+const ASSET_MENTION_SYSTEM_NOTE = '素材 @ 提及规则：用户必须使用 @alias 或 @asset_id 指定某张素材，模型只能使用本轮上下文中列出的已 @ 提及素材；没有 @ 提及的上传素材不得使用，也不会作为可用素材上下文提供。图片素材必须区分 reference/render/both：reference 只参考不入画，render/both 可入画；视频和音频默认是可插入素材。必须在方案中保留素材 @alias，并按用户描述安排视频位置、音频触发时机、层级、运动路径或背景/主体用途。';
 
 app.get('/api/config', async (req, res) => {
   try {
@@ -311,10 +352,39 @@ app.get('/api/config', async (req, res) => {
   }
 });
 
+const mergeConfigSceneAssets = (incomingScript, existingScript) => {
+  if (!Array.isArray(incomingScript?.scenes) || !Array.isArray(existingScript?.scenes)) {
+    return incomingScript;
+  }
+
+  const existingById = new Map(existingScript.scenes.map((scene) => [scene.id, scene]));
+  return {
+    ...incomingScript,
+    scenes: incomingScript.scenes.map((scene) => {
+      const existingScene = existingById.get(scene.id);
+      const mergedAssets = new Map();
+      for (const asset of sceneAssetsForStorage(existingScene?.assets)) {
+        mergedAssets.set(asset.id, asset);
+      }
+      for (const asset of sceneAssetsForStorage(scene.assets)) {
+        mergedAssets.set(asset.id, asset);
+      }
+      return {
+        ...scene,
+        enabled: scene.enabled ?? existingScene?.enabled,
+        assets: [...mergedAssets.values()],
+      };
+    }),
+  };
+};
+
 app.post('/api/config', async (req, res) => {
   try {
-    await fs.writeFile(SCRIPT_PATH, JSON.stringify(req.body, null, 2), 'utf-8');
-    res.json({success: true, config: req.body});
+    const existingScript = await readScript().catch(() => null);
+    const nextScript = mergeConfigSceneAssets(req.body, existingScript);
+    await fs.writeFile(SCRIPT_PATH, JSON.stringify(nextScript, null, 2), 'utf-8');
+    await buildManifest().catch(() => {});
+    res.json({success: true, config: nextScript});
   } catch (e) {
     res.status(500).json({error: e.message});
   }
@@ -438,7 +508,7 @@ app.post('/api/tts/clone', express.raw({type: 'multipart/form-data', limit: '55m
   }
 });
 
-app.post('/api/scene/assets', express.raw({type: 'multipart/form-data', limit: '22mb'}), async (req, res) => {
+app.post('/api/scene/assets', express.raw({type: 'multipart/form-data', limit: '220mb'}), async (req, res) => {
   try {
     const script = await readScript();
     const {fields, files} = parseMultipartBody(req.body, req.headers['content-type']);
@@ -446,12 +516,13 @@ app.post('/api/scene/assets', express.raw({type: 'multipart/form-data', limit: '
     if (!/^scene\d+$/i.test(sceneId)) throw new Error('sceneId must look like scene1, scene2, ...');
     const role = normalizeAssetRole(fields.role);
     const notes = String(fields.notes || '').trim();
+    const alias = String(fields.alias || '').trim();
     const file = files.file;
     const sceneIndex = script.scenes.findIndex((item) => item.id === sceneId);
     if (sceneIndex === -1) throw new Error(`Scene not found: ${sceneId}`);
-    validateSceneImageFile(file);
+    validateSceneAssetFile(file);
 
-    const {asset, storedName} = createSceneAssetRecord({sceneId, file, role, notes});
+    const {asset, storedName} = createSceneAssetRecord({sceneId, file, role, notes, alias});
     const assetDir = path.join(SCENE_ASSET_DIR, sceneId);
     await fs.mkdir(assetDir, {recursive: true});
     const assetPath = path.join(assetDir, storedName);
@@ -755,7 +826,7 @@ app.post('/api/scene/tune-codegen/stream', async (req, res) => {
     }
 
     const timing = await sceneTimingPrompt(sceneId);
-    const assetContext = await sceneAssetsPrompt(sceneId);
+    const assetContext = await sceneAssetsPrompt(sceneId, prompt);
     const conversation = Array.isArray(history)
       ? history.slice(-12).map((item) => `${item.role === 'assistant' ? 'Assistant' : 'User'}: ${item.content ?? ''}`).join('\n')
       : '';
@@ -798,7 +869,7 @@ app.post('/api/scene/tune-codegen/stream', async (req, res) => {
         '',
         `对话上下文:\n${conversation || '(empty)'}`,
         '',
-        `Image assets and visual references:\n${assetContext}`,
+        `Media assets and visual references:\n${assetContext}`,
         '',
         `精确字幕/词块时间轴:\n${timing.summary}`,
       ].join('\n'),
@@ -862,7 +933,7 @@ app.post('/api/scene/design', async (req, res) => {
   try {
     if (!sceneId || !text?.trim()) throw new Error('sceneId and text are required');
     const timing = await sceneTimingPrompt(sceneId);
-    const assetContext = await sceneAssetsPrompt(sceneId);
+    const assetContext = await sceneAssetsPrompt(sceneId, prompt);
     const preciseDuration = timing.durationSeconds ?? (durationMs ? Number((durationMs / 1000).toFixed(3)) : null);
 
     const fallback = [
@@ -883,8 +954,8 @@ app.post('/api/scene/design', async (req, res) => {
     }
 
     const design = await llmChat(
-      '你是 Remotion 视频视觉设计师。根据一段短视频文案、精确音频时长和 cue/词块时间轴，给出具体的单场景视觉设计方案。不要把时长四舍五入到整数秒；必须使用 x.x 或 x.xxx 秒和帧数来描述节奏。方案必须包含：画面基调、主体元素、色彩方案、动画节奏（百分比 + 精确秒/帧）、字幕位置、时长适配建议。请用 Markdown 输出，语言简洁专业。',
-      `sceneId: ${sceneId}\n文案: ${text}\n用户设计要求: ${prompt || '(empty)'}\n当前设计方案: ${currentDesignNotes || '(empty)'}\n精确时长: ${preciseDuration ? `${preciseDuration}秒` : '未知'}\n\nImage assets and visual references:\n${assetContext}\n\n对齐后的字幕/词块时间轴:\n${timing.summary}`,
+      `你是 Remotion 视频视觉设计师。根据一段短视频文案、媒体素材角色、精确音频时长和 cue/词块时间轴，给出具体的单场景视觉设计方案。不要把时长四舍五入到整数秒；必须使用 x.x 或 x.xxx 秒和帧数来描述节奏。必须明确媒体素材使用策略：图片 reference 只作风格/构图参考，图片 render/both、视频、音频可作为插入素材进入 Remotion。${ASSET_MENTION_SYSTEM_NOTE} 方案必须包含：画面基调、主体元素、媒体素材使用策略、色彩方案、动画节奏（百分比 + 精确秒/帧）、字幕位置、时长适配建议。请用 Markdown 输出，语言简洁专业。`,
+      `sceneId: ${sceneId}\n文案: ${text}\n用户设计要求: ${prompt || '(empty)'}\n当前设计方案: ${currentDesignNotes || '(empty)'}\n精确时长: ${preciseDuration ? `${preciseDuration}秒` : '未知'}\n\nMedia assets and visual references:\n${assetContext}\n\n对齐后的字幕/词块时间轴:\n${timing.summary}`,
     );
     res.json({success: true, design: design || fallback, provider: 'openai'});
   } catch (e) {
@@ -903,7 +974,7 @@ app.post('/api/scene/design/stream', async (req, res) => {
   try {
     if (!sceneId || !text?.trim()) throw new Error('sceneId and text are required');
     const timing = await sceneTimingPrompt(sceneId);
-    const assetContext = await sceneAssetsPrompt(sceneId);
+    const assetContext = await sceneAssetsPrompt(sceneId, prompt);
     const preciseDuration = timing.durationSeconds ?? (durationMs ? Number((durationMs / 1000).toFixed(3)) : null);
 
     const fallback = [
@@ -920,8 +991,8 @@ app.post('/api/scene/design/stream', async (req, res) => {
 
     await streamLlmChat(res, {
       fallback,
-      system: '你是 Remotion 视频视觉设计师。根据用户设计要求、图片角色、短视频文案、精确音频时长和 cue/词块时间轴，给出具体的单场景视觉设计方案。不要把时长四舍五入到整数秒；必须使用 x.x 或 x.xxx 秒和帧数来描述节奏。方案必须明确说明哪些图片只作 reference，哪些图片作为 render 素材进入画面。方案必须包含：画面基调、主体元素、图片使用策略、色彩方案、动画节奏（百分比 + 精确秒/帧）、字幕位置、时长适配建议。请用 Markdown 输出，语言简洁专业。',
-      user: `sceneId: ${sceneId}\n文案: ${text}\n用户设计要求: ${prompt || '(empty)'}\n当前设计方案: ${currentDesignNotes || '(empty)'}\n精确时长: ${preciseDuration ? `${preciseDuration}秒` : '未知'}\n\nImage assets and visual references:\n${assetContext}\n\n对齐后的字幕/词块时间轴:\n${timing.summary}`,
+      system: `你是 Remotion 视频视觉设计师。根据用户设计要求、媒体素材角色、短视频文案、精确音频时长和 cue/词块时间轴，给出具体的单场景视觉设计方案。不要把时长四舍五入到整数秒；必须使用 x.x 或 x.xxx 秒和帧数来描述节奏。方案必须明确说明图片 reference/render/both 如何处理，视频如何入画，音频在什么帧触发；如果存在可插入媒体，必须设计具体位置、层级、入场/播放方式给 Remotion 代码使用。${ASSET_MENTION_SYSTEM_NOTE} 方案必须包含：画面基调、主体元素、媒体素材使用策略、色彩方案、动画节奏（百分比 + 精确秒/帧）、字幕位置、时长适配建议。请用 Markdown 输出，语言简洁专业。`,
+      user: `sceneId: ${sceneId}\n文案: ${text}\n用户设计要求: ${prompt || '(empty)'}\n当前设计方案: ${currentDesignNotes || '(empty)'}\n精确时长: ${preciseDuration ? `${preciseDuration}秒` : '未知'}\n\nMedia assets and visual references:\n${assetContext}\n\n对齐后的字幕/词块时间轴:\n${timing.summary}`,
     });
   } catch (e) {
     sendSse(res, 'error', {error: e.message});
@@ -1101,7 +1172,7 @@ app.post('/api/tts/all', async (req, res) => {
       sceneId: null,
       currentSceneId: null,
       currentIndex: 0,
-      total: script.scenes.length,
+      total: script.scenes.filter(isSceneIncludedInVideo).length,
       done: 0,
       step: 'preparing',
       message: '准备批量生成语音',
@@ -1112,8 +1183,8 @@ app.post('/api/tts/all', async (req, res) => {
       endTime: null,
       error: null,
       logs: [],
-    }, `开始批量生成 ${script.scenes.length} 段语音`);
-    for (const scene of script.scenes) {
+    }, `开始批量生成 ${script.scenes.filter(isSceneIncludedInVideo).length} 段语音`);
+    for (const scene of script.scenes.filter(isSceneIncludedInVideo)) {
       const existingAudio = await latestSceneAudio(scene.id);
       const outputAudioFile = force && existingAudio ? versionedSceneAudioFile(scene.id) : defaultSceneAudioFile(scene.id);
       const outputAudioPath = path.join(__dirname, outputAudioFile);
@@ -1204,15 +1275,16 @@ app.get('/api/pipeline/status', (req, res) => {
 });
 
 app.post('/api/pipeline', async (req, res) => {
-  const {sceneId} = req.body || {};
+  const {sceneId, forceTts, reuseAudio = false} = req.body || {};
   if (globalState.running) {
     return res.status(409).json({error: 'Pipeline is already running', status: snapshot()});
   }
 
+  const shouldForceTts = forceTts ?? !reuseAudio;
   const jobId = `${Date.now()}`;
-  res.json({success: true, jobId, status: snapshot()});
+  res.json({success: true, jobId, forceTts: shouldForceTts, status: snapshot()});
   setImmediate(() => {
-    runPipeline(sceneId).then(() => buildManifest()).catch(() => {});
+    runPipeline(sceneId, {forceTts: shouldForceTts}).then(() => buildManifest()).catch(() => {});
   });
 });
 
@@ -1243,10 +1315,12 @@ app.get('/api/pipeline/stream', (req, res) => {
 
 app.get('/api/render/status', async (req, res) => {
   const videoExists = await outputExists(renderState.outputFile);
+  const previewVideos = await listPreviewVideos();
   res.json({
     ...renderState,
     videoExists,
     videoUrl: videoExists ? `/${renderState.outputFile}?t=${renderState.endTime ?? Date.now()}` : null,
+    previewVideos,
   });
 });
 
@@ -1285,6 +1359,8 @@ app.post('/api/render', async (req, res) => {
   renderState.progress = {rendered: 0, total: null, encoded: 0, percent: 0, phase: 'starting'};
   renderState.error = null;
   renderState.logs = [];
+
+  await fs.rm(path.join(__dirname, outputFile), {force: true}).catch(() => {});
 
   const command = process.execPath;
   let child;

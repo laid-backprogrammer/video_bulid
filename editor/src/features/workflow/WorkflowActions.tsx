@@ -35,7 +35,7 @@ export function WorkflowActions({
             重做全部语音
           </button>
           <button type="button" style={buttonStyle('#50fa7b', anyRunning)} onClick={onRunAllPipeline} disabled={anyRunning}>
-            一键语音+对齐全部
+            一键重做语音+对齐全部
           </button>
           <button type="button" style={buttonStyle('#ffb86c', anyRunning)} onClick={onRebuildManifest} disabled={anyRunning}>
             重建预览数据

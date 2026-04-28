@@ -9,7 +9,7 @@ export const SceneXGenerated: React.FC<{
   cues: SegmentCue[];
   durationInFrames: number;
   assets?: SceneAsset[];
-}> = ({cues, durationInFrames}) => {
+}> = ({cues, durationInFrames, assets = []}) => {
   return <AbsoluteFill>{/* scene */}</AbsoluteFill>;
 };
 ```
@@ -22,13 +22,16 @@ Rules:
 - For multi-cue scenes, the main visual composition must process the full `cues` array with runtime logic such as `cues.map`, `cues.find`, `cues.findIndex`, or `cues.reduce`; using `CaptionOverlay` alone is not enough.
 - Do not hard-code narration text, cue titles, sentence arrays, or first-cue-only headline text. Display narration-derived text from `cues`, `cue.text`, or `cue.words` at runtime.
 - Treat `designNotes` and `tuningNotes` as the creative brief. Generate a bespoke scene from that brief instead of adapting a reusable title/caption template.
-- User images have explicit roles:
+- User media assets must be controlled by `@alias` / `@asset_id`. Only use uploaded assets that are explicitly mentioned in `designNotes` or `tuningNotes` and listed in `scene.assets`.
+- Image assets have explicit roles:
   - `render`: visible Remotion image material. Render with `Img` from `remotion` and `staticFile(asset.file.replace(/^public[\\/]/, '').replace(/\\/g, '/'))`.
-  - `reference`: visual reference only. Match its style, layout, lighting, product/character look, or page effect; do not automatically place it into the frame.
+  - `reference`: visual reference only. Match style, layout, lighting, product/character look, or page effect; do not automatically place it into the frame.
   - `both`: may be rendered and used as a visual reference.
-- Do not hard-code uploaded image ids, filenames, or `public/assets/scenes/...` paths. Always choose images from the runtime `assets` prop by role and render no image, or a non-image fallback, if the asset was deleted.
+- Video assets default to insertable material. Render with `Video` from `@remotion/media`, usually inside a `Sequence` for timing/placement.
+- Audio assets default to insertable material. Render with `Audio` from `@remotion/media`, usually inside a `Sequence` for timed SFX, click sounds, music, or cues.
+- Do not hard-code uploaded media ids, filenames, or `public/assets/scenes/...` paths. Always choose media from the runtime `assets` prop by alias/role/assetType and render no media, or a fallback, if the asset was deleted.
 - The main visual layer should contain concrete visual metaphors, diagrams, UI objects, spatial layouts, charts, symbolic objects, or motion systems suggested by the brief. Pure headline cards are not enough.
-- Keep imports limited to React, `remotion`, local hooks/components, and existing dependencies.
+- Keep imports limited to React, `remotion`, `@remotion/media`, local hooks/components, and existing dependencies.
 - This file lives in `src/scenes/generated`, so local imports must use generated-file relative paths:
   - `../../types`
   - `../../hooks/useSceneProgress`

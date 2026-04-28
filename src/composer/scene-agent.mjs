@@ -5,8 +5,23 @@ import path from 'node:path';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {readJsonFile} from './json-utils.mjs';
-import {writeSceneCodegenContext} from './scene-codegen-context.mjs';
+import {
+  buildRepairContextMarkdown,
+  buildSkillSelectionContext,
+  writeSceneCodegenContext,
+} from './scene-codegen-context.mjs';
 import {toRemotionStaticFilePath} from './scene-assets.mjs';
+import {
+  buildFallbackBlueprint as buildSubagentFallbackBlueprint,
+  makeCodeWriterSystemPrompt,
+  makeCodeWriterUserPrompt,
+  makeRepairUserPrompt,
+  makeSkillSelectorSystemPrompt,
+  makeSkillSelectorUserPrompt,
+  makeVisualDirectorSystemPrompt,
+  makeVisualDirectorUserPrompt,
+} from './scene-codegen/subagent-prompts.mjs';
+import {createBaseSkillSelection, normalizeSkillSelection} from './scene-codegen/skill-librarian.mjs';
 
 const ROOT = process.cwd();
 const SCRIPT_PATH = path.join(ROOT, 'src/composer/script.json');
@@ -113,49 +128,14 @@ function runCommand(command, args, options = {}) {
   });
 }
 
-function runShellCommand(command, options = {}) {
-  return new Promise((resolve) => {
-    const child = spawn(command, {
-      cwd: ROOT,
-      shell: true,
-      windowsHide: true,
-      env: process.env,
-    });
-    let stdout = '';
-    let stderr = '';
-
-    child.stdout?.on('data', (chunk) => {
-      stdout += chunk.toString();
-      if (options.stream) process.stdout.write(chunk);
-    });
-    child.stderr?.on('data', (chunk) => {
-      stderr += chunk.toString();
-      if (options.stream) process.stderr.write(chunk);
-    });
-    child.on('error', (error) => {
-      resolve({ok: false, code: null, stdout, stderr: stderr + error.message});
-    });
-    child.on('close', (code) => {
-      resolve({ok: code === 0, code, stdout, stderr});
-    });
-    child.stdin?.on('error', () => {});
-    if (typeof options.stdin === 'string' && options.stdin.length > 0) {
-      child.stdin?.write(options.stdin);
-      child.stdin?.end();
-    } else {
-      child.stdin?.destroy();
-    }
-  });
-}
-
 function logLine(onLog, line) {
   console.log(line);
   onLog?.(line);
 }
 
-async function buildContext(sceneId, {onLog} = {}) {
+async function buildContext(sceneId, {onLog, skillSelection = null} = {}) {
   logLine(onLog, `[scene-agent] Building context for ${sceneId}`);
-  const result = await writeSceneCodegenContext(sceneId, {log: false});
+  const result = await writeSceneCodegenContext(sceneId, {log: false, skillSelection});
   logLine(onLog, `Wrote ${path.relative(ROOT, result.jsonOut)}`);
   logLine(onLog, `Wrote ${path.relative(ROOT, result.mdOut)}`);
   return {
@@ -238,6 +218,13 @@ async function chat(messages, {model, temperature = 0.4} = {}) {
   return content;
 }
 
+function parseJsonObject(text) {
+  const trimmed = String(text || '').trim();
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const body = fenced ? fenced[1].trim() : trimmed;
+  return JSON.parse(body);
+}
+
 function extractCode(text) {
   const fenced = [...text.matchAll(/```(?:tsx|ts|typescript|jsx|javascript)?\s*([\s\S]*?)```/gi)];
   if (fenced.length > 0) {
@@ -282,7 +269,7 @@ function narrationSnippets(context) {
   const addPieces = (text) => {
     const normalized = String(text ?? '').replace(/\s+/g, ' ').trim();
     if (!normalized) return;
-    for (const part of normalized.split(/[，。！？、,.!?:；;\-—|/\\]+/)) {
+    for (const part of normalized.split(/[锛屻€傦紒锛熴€?.!?:锛?\-鈥攟/\\]+/)) {
       const clean = part.trim();
       if (clean.length >= 6) snippets.add(clean);
       if (clean.length >= 10) {
@@ -300,52 +287,7 @@ function narrationSnippets(context) {
 }
 
 function looksLikeMojibake(text = '') {
-  return /[\uFFFD\u934F\u95AB\u68F6\u748B\u6D60\u6D94]|(?:Ã|Â|â€|â€™|â€œ|â€�)/.test(String(text));
-}
-
-function buildFallbackBlueprint(context) {
-  const scene = context.scene ?? {};
-  const alignment = context.alignment ?? {};
-  const assets = Array.isArray(scene.assets) ? scene.assets : [];
-  const colors = Array.isArray(scene.briefColors) && scene.briefColors.length > 0
-    ? scene.briefColors.join(', ')
-    : 'No explicit hex colors found.';
-  const cueSummary = Array.isArray(alignment.cues)
-    ? `${alignment.cues.length} cues, ${alignment.durationInFrames ?? 'unknown'} frames, ${alignment.durationInSeconds ?? 'unknown'} seconds`
-    : 'No aligned cue timeline.';
-
-  return [
-    '# Required Visual Brief',
-    scene.designNotes || 'No visual design brief provided.',
-    '',
-    '# Required Timeline Beats',
-    'Use the percentage beats and pacing described in the visual design brief. Map them onto the actual duration in frames.',
-    `Timing summary: ${cueSummary}.`,
-    '',
-    '# Required Cue and Word Timing Usage',
-    'Drive active captions, word highlights, emphasis, and visual state from alignment.cues and cue.words at runtime.',
-    '',
-    '# Required Subtitle Placement',
-    scene.designNotes?.match(/字幕位置[\s\S]*?(?=\n\n## |\n# |$)/)?.[0]
-      || 'Follow subtitle placement from the visual design brief or tuning notes.',
-    '',
-    '# Must-Have Visual Elements',
-    `Use specified colors: ${colors}.`,
-    assets.length
-      ? [
-        'User images:',
-        ...assets.map((asset) => {
-          const staticPath = asset.staticFilePath || toRemotionStaticFilePath(asset.file);
-          return `- ${asset.name} (${asset.role || 'both'}): ${asset.file} / staticFile("${staticPath}")${asset.notes ? ` - ${asset.notes}` : ''}`;
-        }),
-        'Use role=render images as visible Remotion material when appropriate. Use role=reference images only as effect/style/layout reference, not as visible layers. role=both may be used either way.',
-      ].join('\n')
-      : 'No user image assets or visual references were provided.',
-    scene.tuningNotes || 'No fine-tuning notes provided.',
-    '',
-    '# Avoid Generic Layouts',
-    'Do not reduce the scene to a centered headline or subtitle-only template. Make the visual objects, palette, pacing, transitions, and subtitle placement traceable to the brief.',
-  ].join('\n');
+  return /[\uFFFD\u934F\u95AB\u68F6\u748B\u6D60\u6D94]|(?:脙|脗|芒鈧瑋芒鈧劉|芒鈧搢芒鈧拷)/.test(String(text));
 }
 
 function validateGeneratedCode(code, context) {
@@ -407,15 +349,45 @@ function validateGeneratedCode(code, context) {
   if (/\bfetch\s*\(|XMLHttpRequest|localStorage|sessionStorage|document\.|window\./.test(code)) {
     problems.push('Generated Remotion scene must not use network or browser globals');
   }
+  const renderableAssets = (context.scene?.assets ?? [])
+    .filter((asset) => asset.role === 'render' || asset.role === 'both');
+  if (renderableAssets.length > 0) {
+    const usesRuntimeAssets = /\bassets\b/.test(code);
+    const usesStaticFile = /\bstaticFile\s*\(/.test(code);
+    const imageAssets = renderableAssets.filter((asset) => (asset.assetType ?? 'image') === 'image');
+    const videoAssets = renderableAssets.filter((asset) => asset.assetType === 'video');
+    const audioAssets = renderableAssets.filter((asset) => asset.assetType === 'audio');
+    const usesRemotionImg = /\bImg\b/.test(code) && usesStaticFile;
+    const usesRemotionVideo = /\bVideo\b/.test(code) && usesStaticFile;
+    const usesRemotionAudio = /\bAudio\b/.test(code) && usesStaticFile;
+    const mentionsRenderableRole = /role\b[\s\S]{0,120}(?:render|both)|(?:render|both)[\s\S]{0,120}\brole\b/.test(code);
+    const mentionsAssetType = /assetType\b[\s\S]{0,120}(?:image|video|audio)|(?:image|video|audio)[\s\S]{0,120}\bassetType\b/.test(code);
+    const excludesReferenceOnly = /role\b[\s\S]{0,120}reference|reference[\s\S]{0,120}\brole\b/.test(code);
+    if (!usesRuntimeAssets || !usesStaticFile) {
+      problems.push('Scene has @mentioned user media assets; generated code must select them from the runtime assets prop and use staticFile()');
+    }
+    if (imageAssets.length > 0 && !usesRemotionImg) {
+      problems.push('Scene has @mentioned image assets; generated code must render visible render/both images with Remotion <Img> and staticFile()');
+    }
+    if (videoAssets.length > 0 && !usesRemotionVideo) {
+      problems.push('Scene has @mentioned video assets; generated code must render videos with Remotion <Video> from @remotion/media and staticFile()');
+    }
+    if (audioAssets.length > 0 && !usesRemotionAudio) {
+      problems.push('Scene has @mentioned audio assets; generated code must render timed audio/SFX with Remotion <Audio> from @remotion/media and staticFile()');
+    }
+    if (!mentionsRenderableRole && !mentionsAssetType && !excludesReferenceOnly) {
+      problems.push('Generated code must select uploaded media by alias, role, or assetType so reference-only images are not rendered and the correct media is used');
+    }
+  }
   for (const asset of context.scene?.assets ?? []) {
     const publicPath = String(asset.file || '').replace(/\\/g, '/');
     const staticPath = asset.staticFilePath || toRemotionStaticFilePath(publicPath);
     const hardcodedAssetTokens = [asset.id, publicPath, staticPath].filter(Boolean);
     const hardcodedAssetToken = hardcodedAssetTokens.find((token) => code.includes(token));
     if (hardcodedAssetToken) {
-      problems.push(`Do not hard-code uploaded image ids or paths in generated scenes; select assets from the assets prop at runtime instead: ${hardcodedAssetToken}`);
+      problems.push(`Do not hard-code uploaded media ids or paths in generated scenes; select assets from the assets prop at runtime instead: ${hardcodedAssetToken}`);
     }
-    if (asset.role === 'reference') {
+    if ((asset.assetType ?? 'image') === 'image' && asset.role === 'reference') {
       if (publicPath && (code.includes(publicPath) || code.includes(staticPath))) {
         problems.push(`Reference-only image must not be rendered directly: ${asset.name || asset.id}`);
       }
@@ -470,127 +442,57 @@ async function runChecks({onLog} = {}) {
   return outputs.join('\n\n');
 }
 
-function makeSystemPrompt() {
-  return [
-    'You are a constrained Remotion scene code generation agent.',
-    'Return exactly one complete TSX file. Do not use Markdown fences or explanations.',
-    'You may be visually creative: invent metaphors, layouts, typography, motion, symbolic UI, charts, particles, and transitions.',
-    'scene.designNotes and scene.tuningNotes are the primary creative brief. Turn them into bespoke Remotion visuals instead of adapting a generic title/caption template.',
-    'Before writing code, silently extract a brief-compliance checklist from scene.designNotes and scene.tuningNotes covering palette, subject elements, pacing beats, subtitle placement, and scene transitions.',
-    'Treat the job as a fresh design pass. Do not preserve or imitate a previous generated layout unless it already matches the brief closely.',
-    'If the brief names concrete visual elements such as silhouettes, circles, icons, charts, cards, interfaces, maps, or diagrams, render those as actual layers rather than collapsing them into one centered headline.',
-    'If user images are provided, respect their roles: role=render means a visible image asset available through assets[] and Img/staticFile; role=reference means style/effect/layout reference only and should not be automatically rendered; role=both can be used for either purpose.',
-    'When rendering image assets, type props with optional assets?: SceneAsset[], import SceneAsset from ../../types, derive the Remotion path with asset.file.replace(/^public[\\\\/]/, "").replace(/\\\\/g, "/"), and use <Img src={staticFile(path)} />. Never use native <img> or CSS background-image.',
-    'Never copy concrete uploaded asset ids or public/assets/scenes paths into generated code, even if designNotes contains them. Select renderable images from the runtime assets prop by role, and render nothing or a non-image fallback when no matching asset exists.',
-    'If the brief specifies hex colors, reuse those colors or very close variants in the code.',
-    'If the brief specifies subtitle placement, keep captions in that region unless the brief itself changes it.',
-    'If the brief specifies pacing sections such as 0%-20%, 20%-50%, or cue-by-cue transitions, map those beats onto frame ranges and visible visual changes.',
-    'Use the provided skills/rules context as an effects cookbook: choose suitable timing, sequencing, text reveal, highlight, transition, chart/diagram, shape, or asset patterns.',
-    'The hard constraints are file scope, export shape, existing dependencies, and timing alignment.',
-    'Scene length and cue count are variable. Never assume a fixed number of cues or fixed duration.',
-    'Use exact duration and cue/word timing from alignment data. Do not round scene planning to whole seconds when the context provides fractional seconds or frame ranges.',
-    'For multi-cue scenes, the main visual composition must process the full cues array at runtime using cues.map/find/findIndex/filter/reduce/some or equivalent logic.',
-    'Do not use fixed cue indices such as cues[3], cues.at(5), or cues.slice(2, 4) as the main storytelling structure. Multi-cue scenes must adapt to the runtime cue array.',
-    'Do not hard-code narration text, cue title arrays, sentence arrays, or first-cue-only headline text. Use cues, cue.text, and cue.words as runtime data.',
-    'CaptionOverlay may be used, but it cannot be the only part of the scene that follows the cues.',
-    'Pure centered headline cards, subtitle-only scenes, or generic cue lists are unacceptable when design notes ask for visual scenes, objects, diagrams, or transitions.',
-    'Only import packages listed in package.json. If a skill example imports an unavailable package, adapt the idea using React/CSS/SVG/remotion APIs instead.',
-    'Do not invent new local component imports unless they are present in the provided repository references and resolve from src/scenes/generated.',
-    'The output file is in src/scenes/generated. Use ../../types, ../../hooks/useSceneProgress, ../../components/Background, and ../../components/Captions for local imports outside src/scenes.',
-    'If you copy imports from src/scenes/SceneX.tsx, add one extra ../ because generated files are one directory deeper.',
-    'When hoisting style objects into variables, annotate them as React.CSSProperties to avoid CSS literal types widening to string.',
-    'Use cues and word timings as anchors for reveals, highlights, camera moves, and text emphasis.',
-    'Keep the scene deterministic and render-safe in Remotion.',
-    'Do not use network requests, browser storage, document/window APIs, Node APIs, or new package imports.',
-  ].join('\n');
-}
+async function selectSkillsWithMainAgent(selectionContext, {model, provider, onLog} = {}) {
+  const fallback = createBaseSkillSelection({
+    reason: provider === 'openai'
+      ? 'fallback base rules after skill selection failure'
+      : 'base rules for non-LLM provider',
+  });
+  if (provider !== 'openai') return fallback;
 
-function makeBlueprintSystemPrompt() {
-  return [
-    'You are a Remotion scene planning agent.',
-    'Read the provided scene context and distill only the creative and timing requirements that should control code generation.',
-    'Return compact Markdown only, with these sections in order:',
-    '1. Required Visual Brief',
-    '2. Required Timeline Beats',
-    '3. Required Cue and Word Timing Usage',
-    '4. Required Subtitle Placement',
-    '5. Must-Have Visual Elements',
-    '6. Avoid Generic Layouts',
-    'Be specific. Preserve colors, named objects, pacing phases, transitions, and subtitle constraints from the brief.',
-    'For CJK source text, prefer cue IDs, percentages, and exact copied short phrases only when necessary. Never rewrite source text into mojibake or re-encoded text.',
-    'Do not write code.',
-  ].join('\n');
-}
-
-function makeBlueprintUserPrompt(contextMarkdown) {
-  return [
-    'Extract the highest-priority design and timing instructions for a single Remotion scene.',
-    '',
-    contextMarkdown,
-  ].join('\n');
-}
-
-function makeInitialUserPrompt(contextMarkdown, blueprint) {
-  return [
-    'Generate the target Remotion scene from this context.',
-    'Only output the full contents of the target SceneX.generated.tsx file.',
-    'Start from the visual brief and timestamped captions, not from any prior generic layout.',
-    'The generated visual must cover all cues in the Task JSON, not just the first sentence.',
-    'Derive any narration text from props.cues at runtime instead of embedding copied scene text into string literals.',
-    'Follow scene.designNotes and scene.tuningNotes directly. If they describe illustrations, transitions, charts, objects, or pacing, implement those as visual systems in code.',
-    'Make the brief visibly recognizable in code: palette choices, main objects, pacing sections, subtitle placement, and transitions should all be traceable to the brief when specified.',
-    '',
-    'Planning Blueprint:',
-    blueprint,
-    '',
-    'Original Context:',
-    contextMarkdown,
-  ].join('\n');
-}
-
-function makeRepairPrompt(contextMarkdown, blueprint, code, validationError) {
-  return [
-    'The generated file failed validation. Return a corrected complete TSX file only.',
-    'Fix the validation issues without regressing compliance with the design brief, tuning notes, or timestamped captions.',
-    'If the current layout is generic or weakly aligned to the brief, improve it while repairing.',
-    '',
-    'Planning Blueprint:',
-    blueprint,
-    '',
-    'Validation error:',
-    '```text',
-    validationError.slice(-12000),
-    '```',
-    '',
-    'Current generated file:',
-    '```tsx',
-    code,
-    '```',
-    '',
-    'Original context:',
-    contextMarkdown,
-  ].join('\n');
+  try {
+    logLine(onLog, `[scene-agent] Main Agent selecting skill rules for ${selectionContext.context.sceneId}`);
+    const response = await chat([
+      {role: 'system', content: makeSkillSelectorSystemPrompt()},
+      {
+        role: 'user',
+        content: makeSkillSelectorUserPrompt(selectionContext.markdown),
+      },
+    ], {model, temperature: 0.1});
+    const parsed = parseJsonObject(response);
+    const selection = normalizeSkillSelection({
+      selectedRuleFiles: parsed.selectedRuleFiles,
+      reasons: parsed.reasons,
+      mode: 'generate',
+      source: 'llm',
+    });
+    logLine(onLog, `[scene-agent] Main Agent selected ${selection.selected.length} conditional skill rules`);
+    return selection;
+  } catch (error) {
+    logLine(onLog, `[scene-agent] Skill selection failed; using base rules only: ${error.message || error}`);
+    return fallback;
+  }
 }
 
 async function planSceneBlueprint(contextMarkdown, {model}) {
   return chat([
-    {role: 'system', content: makeBlueprintSystemPrompt()},
-    {role: 'user', content: makeBlueprintUserPrompt(contextMarkdown)},
+    {role: 'system', content: makeVisualDirectorSystemPrompt()},
+    {role: 'user', content: makeVisualDirectorUserPrompt(contextMarkdown)},
   ], {model, temperature: 0.2});
 }
 
 async function generateScene(contextMarkdown, blueprint, {model}) {
   const response = await chat([
-    {role: 'system', content: makeSystemPrompt()},
-    {role: 'user', content: makeInitialUserPrompt(contextMarkdown, blueprint)},
+    {role: 'system', content: makeCodeWriterSystemPrompt()},
+    {role: 'user', content: makeCodeWriterUserPrompt(contextMarkdown, blueprint)},
   ], {model, temperature: 0.4});
   return extractCode(response);
 }
 
-async function repairScene(contextMarkdown, blueprint, code, validationError, {model}) {
+async function repairScene(repairContextMarkdown, code, {model}) {
   const response = await chat([
-    {role: 'system', content: makeSystemPrompt()},
-    {role: 'user', content: makeRepairPrompt(contextMarkdown, blueprint, code, validationError)},
+    {role: 'system', content: makeCodeWriterSystemPrompt()},
+    {role: 'user', content: makeRepairUserPrompt({repairContextMarkdown, code})},
   ], {model, temperature: 0.2});
   return extractCode(response);
 }
@@ -613,7 +515,17 @@ export async function runSceneAgent(options = {}) {
   }
 
   const codegenSettings = await getCodegenSettings(args);
-  const {markdown, json} = await buildContext(args.sceneId, {onLog: args.onLog});
+  logLine(args.onLog, `[scene-agent] Building skill-selection context for ${args.sceneId}`);
+  const selectionContext = await buildSkillSelectionContext(args.sceneId);
+  const skillSelection = await selectSkillsWithMainAgent(selectionContext, {
+    model: args.model,
+    provider: args.dryRun ? 'dry-run' : codegenSettings.provider,
+    onLog: args.onLog,
+  });
+  const {markdown, json} = await buildContext(args.sceneId, {
+    onLog: args.onLog,
+    skillSelection,
+  });
   const targetPath = ensureAllowedTarget(json.targetFile, json.allowedWriteFiles);
   const previousCode = args.check ? await fs.readFile(targetPath, 'utf-8').catch(() => null) : null;
 
@@ -631,13 +543,13 @@ export async function runSceneAgent(options = {}) {
 
   logLine(args.onLog, `[scene-agent] Generating ${path.relative(ROOT, targetPath)}`);
   logLine(args.onLog, `[scene-agent] Provider: ${codegenSettings.provider}`);
-  let blueprint = buildFallbackBlueprint(json);
+  let blueprint = buildSubagentFallbackBlueprint(json);
   if (codegenSettings.provider === 'openai') {
     logLine(args.onLog, `[scene-agent] Planning brief for ${args.sceneId}`);
     blueprint = await planSceneBlueprint(markdown, {model: args.model});
     if (looksLikeMojibake(blueprint)) {
       logLine(args.onLog, '[scene-agent] Planning brief contained mojibake; using local context fallback blueprint');
-      blueprint = buildFallbackBlueprint(json);
+      blueprint = buildSubagentFallbackBlueprint(json);
     }
   } else {
     logLine(args.onLog, `[scene-agent] Using local context blueprint for ${args.sceneId}`);
@@ -678,7 +590,12 @@ export async function runSceneAgent(options = {}) {
           ? 'Local guards failed'
           : 'Validation failed';
         logLine(args.onLog, `[scene-agent] ${repairReason}, asking ${codegenSettings.provider} to repair (${attempt + 1}/${args.repairs})`);
-        code = await repairScene(markdown, blueprint, code, message, {model: args.model});
+        const repairContextMarkdown = await buildRepairContextMarkdown({
+          context: json,
+          blueprint,
+          validationError: message,
+        });
+        code = await repairScene(repairContextMarkdown, code, {model: args.model});
       }
     }
   } catch (error) {

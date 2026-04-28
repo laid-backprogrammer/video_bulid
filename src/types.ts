@@ -17,6 +17,8 @@ export type SceneAsset = {
   id: string;
   name: string;
   file: string;
+  assetType?: 'image' | 'video' | 'audio' | string;
+  alias?: string;
   role?: 'render' | 'reference' | 'both' | string;
   notes?: string;
   mimeType?: string;
@@ -27,6 +29,7 @@ export type SceneAsset = {
 export type SceneData = {
   id: string;
   text: string;
+  enabled?: boolean;
   audioFile: string;
   captionsFile: string;
   durationInFrames: number;

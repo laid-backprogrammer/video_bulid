@@ -1,5 +1,6 @@
 import React, {useEffect, useMemo, useRef, useState} from 'react';
 import {postSse} from '../services/api/client';
+import type {SceneAssetRole, SceneAssetType} from '../types';
 
 type ChatMessage = {
   role: 'user' | 'assistant' | 'system';
@@ -17,11 +18,30 @@ type TuneCodegenDialogProps = {
 
 type RunPhase = 'idle' | 'uploading' | 'analyzing' | 'codegen' | 'done' | 'failed';
 
+const mediaAccept = [
+  '.png,.jpg,.jpeg,.webp,.svg,image/png,image/jpeg,image/webp,image/svg+xml',
+  '.mp4,.webm,.mov,.m4v,video/mp4,video/webm,video/quicktime',
+  '.mp3,.wav,.m4a,.aac,.ogg,audio/mpeg,audio/wav,audio/mp4,audio/aac,audio/ogg',
+].join(',');
+
+const detectAssetType = (file: File): SceneAssetType => {
+  const name = file.name.toLowerCase();
+  if (file.type.startsWith('video/') || /\.(mp4|webm|mov|m4v)$/i.test(name)) return 'video';
+  if (file.type.startsWith('audio/') || /\.(mp3|wav|m4a|aac|ogg)$/i.test(name)) return 'audio';
+  return 'image';
+};
+
+const assetTypeLabel = (type?: SceneAssetType | string) => (
+  type === 'video' ? '视频' : type === 'audio' ? '音频' : '图片'
+);
+
 export function TuneCodegenDialog({open, sceneId, sceneText, disabled = false, onClose, onDone}: TuneCodegenDialogProps) {
   const [input, setInput] = useState('');
   const [running, setRunning] = useState(false);
   const [phase, setPhase] = useState<RunPhase>('idle');
   const [referenceFile, setReferenceFile] = useState<File | null>(null);
+  const referenceType = referenceFile ? detectAssetType(referenceFile) : 'image';
+  const [referenceRole, setReferenceRole] = useState<SceneAssetRole>('render');
   const [referenceNotes, setReferenceNotes] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>([
     {role: 'system', content: '描述你在预览里看到的问题或想要的效果。我会结合文案、字幕时间轴、设计备注和当前素材，重新生成并校验 Remotion 场景代码。'},
@@ -54,21 +74,27 @@ export function TuneCodegenDialog({open, sceneId, sceneText, disabled = false, o
     setLogs((current) => [...current, `[${new Date().toLocaleTimeString()}] ${line}`].slice(-160));
   };
 
+  const roleLabel = referenceType === 'image'
+    ? referenceRole === 'reference' ? '参考图' : referenceRole === 'render' ? '插入素材' : '参考+插入素材'
+    : `${assetTypeLabel(referenceType)}插入素材`;
+
   const uploadReference = async () => {
     if (!referenceFile) return null;
     setPhase('uploading');
-    pushLog(`上传参考图：${referenceFile.name}`);
+    pushLog(`上传${roleLabel}：${referenceFile.name}`);
     const form = new FormData();
     form.append('sceneId', sceneId);
-    form.append('role', 'reference');
-    form.append('notes', referenceNotes.trim() || `微调对话参考图：${referenceFile.name}`);
+    form.append('role', referenceRole);
+    form.append('assetType', referenceType);
+    form.append('notes', referenceNotes.trim() || `微调对话${roleLabel}：${referenceFile.name}`);
     form.append('file', referenceFile);
     const response = await fetch('/api/scene/assets', {method: 'POST', body: form});
     const text = await response.text();
     const payload = text ? JSON.parse(text) : {};
     if (!response.ok) throw new Error(payload.error || text || response.statusText);
-    pushLog(`参考图已加入 LLM 上下文：${payload.asset?.name ?? referenceFile.name}`);
+    pushLog(`${roleLabel}已加入 LLM 上下文：${payload.asset?.name ?? referenceFile.name}`);
     setReferenceFile(null);
+    setReferenceRole('render');
     setReferenceNotes('');
     return payload;
   };
@@ -76,6 +102,7 @@ export function TuneCodegenDialog({open, sceneId, sceneText, disabled = false, o
   const send = async () => {
     if (!canSend) return;
     const prompt = input.trim();
+    const pendingReferenceNotes = referenceNotes.trim();
     const history = messages.filter((item) => item.role !== 'system');
     setInput('');
     setRunning(true);
@@ -83,17 +110,21 @@ export function TuneCodegenDialog({open, sceneId, sceneText, disabled = false, o
     setLogs([]);
     setMessages((current) => [
       ...current,
-      {role: 'user', content: referenceFile ? `${prompt}\n\n[参考图] ${referenceFile.name}` : prompt},
+      {role: 'user', content: referenceFile ? `${prompt}\n\n[${roleLabel}] ${referenceFile.name}` : prompt},
       {role: 'assistant', content: '收到。我会先读取当前时间轴、设计备注和参考素材，然后重新生成 Remotion 代码。'},
     ]);
 
     try {
-      await uploadReference();
+      const uploadPayload = await uploadReference();
+      const uploadedAlias = uploadPayload?.asset?.alias ? `@${uploadPayload.asset.alias}` : '';
+      const effectivePrompt = uploadedAlias
+        ? `${prompt}\n\n${uploadedAlias} ${pendingReferenceNotes || roleLabel}`
+        : prompt;
       setPhase('analyzing');
       pushLog('连接 OpenAI，分析微调要求和时间轴上下文');
       await postSse('/api/scene/tune-codegen/stream', {
         sceneId,
-        prompt,
+        prompt: effectivePrompt,
         text: sceneText,
         history,
       }, {
@@ -146,7 +177,7 @@ export function TuneCodegenDialog({open, sceneId, sceneText, disabled = false, o
 
         <div style={phaseBarStyle}>
           {[
-            ['uploading', '上传参考图'],
+            ['uploading', '上传素材'],
             ['analyzing', '分析要求'],
             ['codegen', '生成代码'],
             ['done', '完成'],
@@ -187,20 +218,38 @@ export function TuneCodegenDialog({open, sceneId, sceneText, disabled = false, o
             <div style={referenceRowStyle}>
               <input
                 type="file"
-                accept=".png,.jpg,.jpeg,.webp,.svg,image/png,image/jpeg,image/webp,image/svg+xml"
-                onChange={(event) => setReferenceFile(event.target.files?.[0] ?? null)}
+                accept={mediaAccept}
+                onChange={(event) => {
+                  const file = event.target.files?.[0] ?? null;
+                  setReferenceFile(file);
+                  if (file && detectAssetType(file) !== 'image') setReferenceRole('render');
+                }}
                 disabled={running || disabled}
                 style={fileInputStyle}
               />
+              {referenceType === 'image' ? (
+                <select
+                  value={referenceRole}
+                  onChange={(event) => setReferenceRole(event.target.value as SceneAssetRole)}
+                  disabled={running || disabled}
+                  style={notesInputStyle}
+                >
+                  <option value="render">插入画面</option>
+                  <option value="reference">仅作参考</option>
+                  <option value="both">参考+插入</option>
+                </select>
+              ) : (
+                <span style={lockedRoleStyle}>插入素材</span>
+              )}
               <input
                 value={referenceNotes}
                 onChange={(event) => setReferenceNotes(event.target.value)}
-                placeholder="参考图说明，例如：按这个构图和色彩微调"
+                placeholder="素材说明，例如：@click 在点击时播放，或 @clip 放进画面中央"
                 disabled={running || disabled}
                 style={notesInputStyle}
               />
             </div>
-            {referenceFile ? <div style={fileHintStyle}>将作为 reference 素材上传：{referenceFile.name}</div> : null}
+            {referenceFile ? <div style={fileHintStyle}>将作为 {referenceRole} 素材上传：{referenceFile.name}</div> : null}
           </div>
           <button type="button" style={sendButtonStyle(!canSend)} disabled={!canSend} onClick={send}>
             {running ? '正在生成 Remotion 代码...' : '发送并生成 Remotion 代码'}
@@ -226,9 +275,10 @@ const logBoxStyle: React.CSSProperties = {fontFamily: 'Consolas, monospace', fon
 const footerStyle: React.CSSProperties = {display: 'grid', gridTemplateColumns: '1fr 180px', gap: 10, padding: 14, borderTop: '1px solid rgba(255,255,255,0.08)'};
 const composerStyle: React.CSSProperties = {display: 'grid', gap: 8};
 const inputStyle: React.CSSProperties = {minHeight: 72, resize: 'vertical', borderRadius: 12, border: '1px solid rgba(255,255,255,0.12)', background: '#060a13', color: '#e6edf3', padding: 10, lineHeight: 1.5};
-const referenceRowStyle: React.CSSProperties = {display: 'grid', gridTemplateColumns: 'minmax(180px, 0.55fr) 1fr', gap: 8};
+const referenceRowStyle: React.CSSProperties = {display: 'grid', gridTemplateColumns: 'minmax(180px, 0.55fr) 150px 1fr', gap: 8};
 const fileInputStyle: React.CSSProperties = {minWidth: 0, borderRadius: 10, border: '1px solid rgba(255,255,255,0.12)', background: '#060a13', color: '#c8dcff', padding: '7px 9px', fontSize: 12};
 const notesInputStyle: React.CSSProperties = {minWidth: 0, borderRadius: 10, border: '1px solid rgba(255,255,255,0.12)', background: '#060a13', color: '#e6edf3', padding: '8px 10px', fontSize: 12};
+const lockedRoleStyle: React.CSSProperties = {minWidth: 0, borderRadius: 10, border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.04)', color: '#9fb3c8', padding: '8px 10px', fontSize: 12};
 const fileHintStyle: React.CSSProperties = {fontSize: 12, color: '#8be9fd'};
 const sendButtonStyle = (disabled: boolean): React.CSSProperties => ({alignSelf: 'stretch', border: `1px solid ${disabled ? 'rgba(255,255,255,0.12)' : 'rgba(80,250,123,0.46)'}`, background: disabled ? 'rgba(255,255,255,0.05)' : 'rgba(80,250,123,0.14)', color: disabled ? '#6f8098' : '#50fa7b', borderRadius: 12, padding: '0 14px', cursor: disabled ? 'not-allowed' : 'pointer', fontWeight: 900});
 const closeButtonStyle: React.CSSProperties = {height: 36, border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.06)', color: '#e6edf3', borderRadius: 10, padding: '8px 10px', cursor: 'pointer', fontWeight: 800};

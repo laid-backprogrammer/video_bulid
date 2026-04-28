@@ -1,4 +1,6 @@
 import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import {Player} from '@remotion/player';
+import {PreviewScene} from '../../src/Root';
 import {formatDuration, getErrorMessage, renderPhaseLabel, STEP_META, STUDIO_URL} from './app/workflow';
 import {TuneCodegenDialog} from './components/TuneCodegenDialog';
 import {Panel} from './components/ui/Panel';
@@ -18,7 +20,8 @@ import type {
   PipelineStatus,
   RenderStatus,
   SceneAsset,
-  SceneAssetRole,
+  SceneAssetDraft,
+  SceneAssetType,
   SceneItem,
   ScriptScene,
   TtsStatus,
@@ -53,6 +56,34 @@ class ErrorBoundary extends React.Component<{children: React.ReactNode}, {hasErr
 
 /* ---------- components ---------- */
 
+const createAssetDraftId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+const createAssetAlias = (name: string) => {
+  const cleaned = name
+    .normalize('NFKC')
+    .replace(/\.[a-z0-9]+$/i, '')
+    .replace(/[^\p{Letter}\p{Number}_-]+/gu, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48);
+  return cleaned || 'asset';
+};
+
+const detectAssetType = (file: File): SceneAssetType => {
+  const name = file.name.toLowerCase();
+  if (file.type.startsWith('video/') || /\.(mp4|webm|mov|m4v)$/i.test(name)) return 'video';
+  if (file.type.startsWith('audio/') || /\.(mp3|wav|m4a|aac|ogg)$/i.test(name)) return 'audio';
+  return 'image';
+};
+
+const createAssetDraft = (file: File): SceneAssetDraft => ({
+  id: createAssetDraftId(),
+  file,
+  assetType: detectAssetType(file),
+  alias: createAssetAlias(file.name),
+  role: 'render',
+  notes: '',
+});
+
 export default function App() {
   const [config, setConfig] = useState<Config | null>(null);
   const [scenes, setScenes] = useState<SceneItem[]>([]);
@@ -66,14 +97,11 @@ export default function App() {
   const [step, setStep] = useState<WorkflowStep>('script');
   const [cacheKey, setCacheKey] = useState(Date.now());
   const [modal, setModal] = useState<ModalType>(null);
-  const [previewVideoUrl, setPreviewVideoUrl] = useState<string | null>(null);
   const [cloneFile, setCloneFile] = useState<File | null>(null);
   const [cloneName, setCloneName] = useState('');
   const [cloneDescribe, setCloneDescribe] = useState('');
   const [cloneLoading, setCloneLoading] = useState(false);
-  const [assetFile, setAssetFile] = useState<File | null>(null);
-  const [assetRole, setAssetRole] = useState<SceneAssetRole>('reference');
-  const [assetNotes, setAssetNotes] = useState('');
+  const [assetDrafts, setAssetDrafts] = useState<SceneAssetDraft[]>([]);
   const [assetLoading, setAssetLoading] = useState(false);
   const [tuneDialogOpen, setTuneDialogOpen] = useState(false);
   const logsRef = useRef<HTMLDivElement>(null);
@@ -343,20 +371,54 @@ export default function App() {
     });
 
   const updateConfigField = <K extends keyof Config>(field: K, value: Config[K]) => {
-    if (!config) return;
-    setConfig({...config, [field]: value});
+    setConfig((current) => (current ? {...current, [field]: value} : current));
   };
 
-  const updateSceneField = (sceneId: string, field: keyof ScriptScene, value: string) => {
-    if (!config) return;
-    setConfig({
-      ...config,
-      scenes: config.scenes.map((s) => (s.id === sceneId ? {...s, [field]: value} : s)),
-    });
+  const updateSceneField = <K extends keyof ScriptScene>(sceneId: string, field: K, value: ScriptScene[K]) => {
+    setConfig((current) => (
+      current
+        ? {
+          ...current,
+          scenes: current.scenes.map((s) => (s.id === sceneId ? {...s, [field]: value} : s)),
+        }
+        : current
+    ));
   };
 
   const updateSceneText = (sceneId: string, text: string) => updateSceneField(sceneId, 'text', text);
   const updateSceneDesign = (sceneId: string, notes: string) => updateSceneField(sceneId, 'designNotes', notes);
+
+  const addAssetDrafts = useCallback((files: FileList | null) => {
+    const nextFiles = Array.from(files ?? []);
+    if (!nextFiles.length) return;
+    setAssetDrafts((current) => [...current, ...nextFiles.map(createAssetDraft)]);
+  }, []);
+
+  const updateAssetDraft = useCallback((
+    draftId: string,
+    patch: Partial<Pick<SceneAssetDraft, 'alias' | 'role' | 'notes'>>,
+  ) => {
+    setAssetDrafts((current) => current.map((draft) => (
+      draft.id === draftId ? {...draft, ...patch} : draft
+    )));
+  }, []);
+
+  const removeAssetDraft = useCallback((draftId: string) => {
+    setAssetDrafts((current) => current.filter((draft) => draft.id !== draftId));
+  }, []);
+
+  const setSceneEnabled = (sceneId: string, enabled: boolean) =>
+    runAction(`${enabled ? '启用' : '弃用'} ${sceneId} 成片`, async () => {
+      if (!config) return;
+      const nextConfig = {
+        ...config,
+        scenes: config.scenes.map((scene) => (scene.id === sceneId ? {...scene, enabled} : scene)),
+      };
+      setConfig(nextConfig);
+      await postJson('/api/config', nextConfig);
+      await postJson('/api/manifest/rebuild', {});
+      pushLog(`${sceneId} 已${enabled ? '加入' : '移出'}完整视频导出`);
+    });
 
   const runTts = (sceneId: string, force = false) =>
     runAction(`${force ? '重新生成' : '生成'}语音 ${sceneId}`, async () => {
@@ -391,38 +453,48 @@ export default function App() {
     }
   };
 
-  const uploadSceneAsset = async (sceneId: string) => {
-    if (!assetFile) return;
+  const uploadSceneAssets = async (sceneId: string) => {
+    if (!assetDrafts.length) return [];
     setAssetLoading(true);
-    pushLog(`开始上传 ${sceneId} 图片：${assetFile.name}`);
+    pushLog(`开始上传 ${sceneId} 媒体素材：${assetDrafts.length} 个`);
     try {
-      const form = new FormData();
-      form.append('sceneId', sceneId);
-      form.append('role', assetRole);
-      form.append('notes', assetNotes.trim());
-      form.append('file', assetFile);
-      const data = await fetchJson<{config: Config; asset?: SceneAsset}>('/api/scene/assets', {
-        method: 'POST',
-        body: form,
-      });
-      setConfig(data.config);
-      setAssetFile(null);
-      setAssetNotes('');
+      const uploaded: SceneAsset[] = [];
+      let nextConfig: Config | null = null;
+      for (const draft of assetDrafts) {
+        const form = new FormData();
+        form.append('sceneId', sceneId);
+        form.append('role', draft.role);
+        form.append('assetType', draft.assetType);
+        form.append('alias', draft.alias.trim() || createAssetAlias(draft.file.name));
+        form.append('notes', draft.notes.trim());
+        form.append('file', draft.file);
+        const data = await fetchJson<{config: Config; asset?: SceneAsset}>('/api/scene/assets', {
+          method: 'POST',
+          body: form,
+        });
+        if (data.asset) uploaded.push(data.asset);
+        nextConfig = data.config;
+        pushLog(`${sceneId} 已上传素材 @${data.asset?.alias ?? draft.alias}：${data.asset?.name ?? draft.file.name}`);
+      }
+      if (nextConfig) setConfig(nextConfig);
+      setAssetDrafts([]);
       await refresh();
-      pushLog(`${sceneId} 图片已上传为 ${assetRole}：${data.asset?.name ?? assetFile.name}`);
+      pushLog(`${sceneId} 已上传 ${uploaded.length} 个媒体素材`);
+      return uploaded;
     } catch (error) {
-      pushLog(`图片上传失败：${getErrorMessage(error)}`);
+      pushLog(`素材上传失败：${getErrorMessage(error)}`);
+      return [];
     } finally {
       setAssetLoading(false);
     }
   };
 
   const deleteSceneAsset = (sceneId: string, assetId: string) =>
-    runAction(`删除图片 ${assetId}`, async () => {
+    runAction(`删除素材 ${assetId}`, async () => {
       const result = await postJson<{config: Config}>('/api/scene/assets/delete', {sceneId, assetId});
       setConfig(result.config);
       await refresh();
-      pushLog(`${sceneId} 图片已删除`);
+      pushLog(`${sceneId} 素材已删除`);
     });
 
   const runAsr = (sceneId: string, force = false) =>
@@ -453,14 +525,14 @@ export default function App() {
 
   const runScenePipeline = (sceneId: string) =>
     runAction(`完整处理 ${sceneId}`, async () => {
-      await postJson('/api/pipeline', {sceneId});
-      pushLog(`${sceneId} 已启动完整流程：TTS → 时间轴对齐 → manifest`);
+      await postJson('/api/pipeline', {sceneId, forceTts: true});
+      pushLog(`${sceneId} 已启动完整流程：重新生成语音 → 时间轴对齐 → manifest`);
     });
 
   const runAllPipeline = () =>
     runAction('完整处理全部场景', async () => {
-      await postJson('/api/pipeline', {});
-      pushLog('已启动全部场景完整流程：TTS → 时间轴对齐 → manifest');
+      await postJson('/api/pipeline', {forceTts: true});
+      pushLog('已启动全部场景完整流程：重新生成语音 → 时间轴对齐 → manifest');
     });
 
   const regenerateAllTts = () =>
@@ -488,7 +560,6 @@ export default function App() {
     runAction(`渲染本段预览 ${sceneId}`, async () => {
       await postJson('/api/render', {sceneId});
       pushLog(`已启动 ${sceneId} 单段预览渲染`);
-      setPreviewVideoUrl(null);
       setStep('preview');
     });
 
@@ -510,10 +581,10 @@ export default function App() {
       streamLogs: [`[${new Date().toLocaleTimeString()}] 连接 LLM SSE 流...`],
     });
     try {
-      if (assetFile) {
-        appendModalLog('design', sceneId, `上传图片：${assetFile.name} · ${assetRole}`);
-        await uploadSceneAsset(sceneId);
-        appendModalLog('design', sceneId, '图片已写入场景素材上下文');
+      if (assetDrafts.length) {
+        appendModalLog('design', sceneId, `上传媒体素材：${assetDrafts.map((draft) => `@${draft.alias}`).join('、')}`);
+        const uploaded = await uploadSceneAssets(sceneId);
+        appendModalLog('design', sceneId, `已写入 ${uploaded.length} 张场景素材上下文`);
       }
       await postSse('/api/scene/design/stream', {
         sceneId,
@@ -553,6 +624,35 @@ export default function App() {
 
   /* ---------- status ---------- */
   const anyRunning = Boolean(busy || pipeline?.running || render?.running || ttsStatus?.running || codegen?.running || modal?.loading || cloneLoading || assetLoading);
+  const renderBusy = Boolean(render?.running);
+  const codegenBusy = Boolean(codegen?.running);
+  const pipelineBusy = Boolean(pipeline?.running);
+  const ttsBusy = Boolean(ttsStatus?.running);
+  const designBusy = Boolean(modal?.loading);
+  const audioLocked = Boolean(ttsBusy || pipelineBusy || cloneLoading || renderBusy || codegenBusy);
+  const designLocked = Boolean(designBusy || codegenBusy);
+  const codegenLocked = Boolean(codegenBusy || renderBusy || pipelineBusy || designBusy);
+  const renderLocked = Boolean(renderBusy || codegenBusy || ttsBusy || pipelineBusy);
+  const assetLocked = Boolean(assetLoading || codegenBusy || designBusy);
+  const tuneLocked = Boolean(codegenBusy || renderBusy || designBusy);
+  const configLocked = Boolean(codegenBusy || designBusy);
+  const workflowActionLocked = step === 'audio'
+    ? audioLocked
+    : step === 'design'
+      ? designLocked
+      : step === 'preview'
+        ? renderLocked
+        : step === 'render'
+          ? renderLocked
+          : false;
+  const sceneActionLocks = {
+    audio: audioLocked,
+    pipeline: Boolean(pipelineBusy || ttsBusy),
+    design: designLocked,
+    codegen: codegenLocked,
+    render: renderLocked,
+    tune: tuneLocked,
+  };
   const ttsPercent = ttsStatus?.total
     ? Math.round((ttsStatus.done / ttsStatus.total) * 100)
     : ttsStatus?.running
@@ -582,8 +682,25 @@ export default function App() {
             ? '流水线运行中'
             : null;
   const statusProblem = ttsStatus?.error || codegen?.error || render?.error || null;
-  const completedScenes = scenes.filter((s) => s.audioExists && s.captionExists).length;
-  const totalScenes = scenes.length;
+  const includedScenes = scenes.filter((s) => s.enabled !== false && s.text.trim());
+  const completedScenes = includedScenes.filter((s) => s.audioExists && s.captionExists).length;
+  const totalScenes = includedScenes.length;
+  const previewFps = config?.fps ?? 30;
+  const livePreviewScene = selectedScene
+    ? {
+      id: selectedScene.id,
+      text: selectedScene.text,
+      enabled: selectedScene.enabled,
+      audioFile: selectedScene.audioFile ?? '',
+      captionsFile: selectedScene.captionsFile ?? '',
+      durationInFrames: Math.max(
+        1,
+        Math.ceil(selectedScene.durationInFrames ?? ((selectedScene.durationMs ?? 4000) / 1000) * previewFps),
+      ),
+      cues: selectedScene.cues ?? [],
+      assets: selectedScene.assets ?? [],
+    }
+    : null;
 
   if (!config) {
     return (
@@ -614,9 +731,9 @@ export default function App() {
                 onChange={(e) => updateConfigField('llmModel', e.target.value)}
                 placeholder="gpt-5.5"
                 style={modelInputStyle}
-                disabled={anyRunning}
+                disabled={configLocked}
               />
-              <button type="button" style={buttonStyle('#8be9fd', anyRunning)} onClick={saveConfig} disabled={anyRunning}>
+              <button type="button" style={buttonStyle('#8be9fd', configLocked)} onClick={saveConfig} disabled={configLocked}>
                 保存脚本
               </button>
             </div>
@@ -632,7 +749,7 @@ export default function App() {
 
           <WorkflowActions
             step={step}
-            anyRunning={anyRunning}
+            anyRunning={workflowActionLocked}
             completedScenes={completedScenes}
             totalScenes={totalScenes}
             ttsRunning={Boolean(ttsStatus?.running)}
@@ -657,10 +774,11 @@ export default function App() {
             pipeline={pipeline}
             selectedId={selectedId}
             step={step}
-            anyRunning={anyRunning}
+            actionLocks={sceneActionLocks}
             ttsStatus={ttsStatus}
             codegen={codegen}
             onSelect={setSelectedId}
+            onSetSceneEnabled={setSceneEnabled}
             onUpdateSceneText={updateSceneText}
             onRunTts={runTts}
             onRunAsr={runAsr}
@@ -712,7 +830,7 @@ export default function App() {
                             value={config.llmBaseUrl ?? ''}
                             onChange={(e) => updateConfigField('llmBaseUrl', e.target.value)}
                             placeholder="https://api.openai.com"
-                            disabled={anyRunning}
+                            disabled={configLocked}
                             style={smallInputStyle}
                           />
                         </label>
@@ -723,7 +841,7 @@ export default function App() {
                             value={config.llmApiKey ?? ''}
                             onChange={(e) => updateConfigField('llmApiKey', e.target.value)}
                             placeholder="sk-..."
-                            disabled={anyRunning}
+                            disabled={configLocked}
                             style={smallInputStyle}
                             autoComplete="off"
                           />
@@ -734,7 +852,7 @@ export default function App() {
                             value={config.llmModel ?? ''}
                             onChange={(e) => updateConfigField('llmModel', e.target.value)}
                             placeholder="gpt-5.5"
-                            disabled={anyRunning}
+                            disabled={configLocked}
                             style={smallInputStyle}
                           />
                         </label>
@@ -753,28 +871,28 @@ export default function App() {
                           type="file"
                           accept=".mp3,.wav,.m4a,audio/mpeg,audio/wav,audio/x-m4a,audio/mp4"
                           onChange={(e) => setCloneFile(e.target.files?.[0] ?? null)}
-                          disabled={cloneLoading || anyRunning}
+                          disabled={audioLocked}
                           style={fileInputStyle}
                         />
                         <input
                           value={cloneName}
                           onChange={(e) => setCloneName(e.target.value)}
                           placeholder="模型名称"
-                          disabled={cloneLoading || anyRunning}
+                          disabled={audioLocked}
                           style={smallInputStyle}
                         />
                         <input
                           value={cloneDescribe}
                           onChange={(e) => setCloneDescribe(e.target.value)}
                           placeholder="模型描述"
-                          disabled={cloneLoading || anyRunning}
+                          disabled={audioLocked}
                           style={smallInputStyle}
                         />
                         <button
                           type="button"
-                          style={buttonStyle('#50fa7b', cloneLoading || anyRunning || !cloneFile || !cloneName.trim())}
+                          style={buttonStyle('#50fa7b', audioLocked || !cloneFile || !cloneName.trim())}
                           onClick={uploadVoiceClone}
-                          disabled={cloneLoading || anyRunning || !cloneFile || !cloneName.trim()}
+                          disabled={audioLocked || !cloneFile || !cloneName.trim()}
                         >
                           {cloneLoading ? '创建中…' : '创建并使用'}
                         </button>
@@ -832,15 +950,13 @@ export default function App() {
                     <SceneAssetsPanel
                       sceneId={selectedScene.id}
                       assets={selectedConfigScene?.assets ?? []}
-                      assetFile={assetFile}
-                      assetRole={assetRole}
-                      assetNotes={assetNotes}
+                      assetDrafts={assetDrafts}
                       loading={assetLoading}
-                      disabled={anyRunning}
-                      onFileChange={setAssetFile}
-                      onRoleChange={setAssetRole}
-                      onNotesChange={setAssetNotes}
-                      onUpload={() => uploadSceneAsset(selectedScene.id)}
+                      disabled={assetLocked}
+                      onFilesChange={addAssetDrafts}
+                      onDraftChange={updateAssetDraft}
+                      onDraftRemove={removeAssetDraft}
+                      onUpload={() => uploadSceneAssets(selectedScene.id)}
                       onDelete={(assetId) => deleteSceneAsset(selectedScene.id, assetId)}
                     />
 
@@ -849,7 +965,7 @@ export default function App() {
                         value={selectedConfigScene?.designNotes ?? ''}
                         onChange={(e) => updateSceneDesign(selectedScene.id, e.target.value)}
                         placeholder="点击「重新生成设计方案」自动生成，或在这里直接编辑画面设计、节奏、字幕位置和素材使用要求。"
-                        disabled={anyRunning}
+                        disabled={designLocked}
                         style={{...textareaStyle, minHeight: 280, fontFamily: 'Consolas, monospace'}}
                         rows={12}
                       />
@@ -857,19 +973,19 @@ export default function App() {
                       <div style={{display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap'}}>
                         <button
                           type="button"
-                          style={buttonStyle('#bd93f9', anyRunning)}
+                          style={buttonStyle('#bd93f9', designLocked)}
                           onClick={() =>
                             setModal({kind: 'design', sceneId: selectedScene.id, prompt: '', loading: false})
                           }
-                          disabled={anyRunning}
+                          disabled={designLocked}
                         >
                           重新生成设计方案
                         </button>
                         <button
                           type="button"
-                          style={buttonStyle('#50fa7b', anyRunning || !selectedScene.captionExists)}
+                          style={buttonStyle('#50fa7b', codegenLocked || !selectedScene.captionExists)}
                           onClick={() => runSceneCodegen(selectedScene.id)}
-                          disabled={anyRunning || !selectedScene.captionExists}
+                          disabled={codegenLocked || !selectedScene.captionExists}
                         >
                           生成 Remotion 代码
                         </button>
@@ -907,16 +1023,40 @@ export default function App() {
                 {/* PREVIEW PANEL */}
                 {step === 'preview' && (
                   <>
-                    <Panel title="本段视频预览" subtitle={render?.sceneId === selectedScene.id ? render.outputFile : '未渲染'}>
+                    <Panel
+                      title="Remotion 实时预览"
+                      subtitle={livePreviewScene ? `${livePreviewScene.durationInFrames}f · 不导出文件` : '未就绪'}
+                    >
+                      {livePreviewScene ? (
+                        <Player
+                          key={`${livePreviewScene.id}-${cacheKey}-${livePreviewScene.durationInFrames}`}
+                          component={PreviewScene}
+                          inputProps={{sceneId: livePreviewScene.id, scenes: [livePreviewScene], fps: previewFps}}
+                          durationInFrames={livePreviewScene.durationInFrames}
+                          compositionWidth={1920}
+                          compositionHeight={1080}
+                          fps={previewFps}
+                          controls
+                          style={playerStyle}
+                        />
+                      ) : (
+                        <div style={emptyStyle}>当前场景还没有可预览数据。</div>
+                      )}
+                    </Panel>
+
+                    <Panel
+                      title="本段 MP4 导出"
+                      subtitle={render?.previewVideos?.[selectedScene.id]?.outputFile ?? (render?.sceneId === selectedScene.id ? render.outputFile : '未渲染')}
+                    >
                       {(() => {
                         const url =
                           render?.sceneId === selectedScene.id && render.videoExists
                             ? render.videoUrl
-                            : previewVideoUrl;
+                            : render?.previewVideos?.[selectedScene.id]?.videoUrl ?? null;
                         return url ? (
                           <video key={url} controls src={url} style={videoStyle} />
                         ) : (
-                          <div style={emptyStyle}>点击「渲染本段预览」生成视频。</div>
+                          <div style={emptyStyle}>需要导出单段 MP4 时，点击左侧「渲染本段预览」。</div>
                         );
                       })()}
                     </Panel>
@@ -929,9 +1069,9 @@ export default function App() {
                       )}
                       <button
                         type="button"
-                        style={{...buttonStyle('#8be9fd', anyRunning), marginTop: 12}}
+                        style={{...buttonStyle('#8be9fd', tuneLocked), marginTop: 12}}
                         onClick={() => setTuneDialogOpen(true)}
-                        disabled={anyRunning}
+                        disabled={tuneLocked}
                       >
                         打开微调对话
                       </button>
@@ -963,14 +1103,14 @@ export default function App() {
                         <div style={{...progressBarStyle, width: `${progress?.percent ?? 0}%`}} />
                       </div>
                       <div style={{marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap'}}>
-                        <button type="button" style={buttonStyle('#ff79c6', anyRunning)} onClick={renderVideo} disabled={anyRunning}>
+                        <button type="button" style={buttonStyle('#ff79c6', renderLocked)} onClick={renderVideo} disabled={renderLocked}>
                           {render?.running ? '渲染中…' : '开始渲染完整视频'}
                         </button>
                       </div>
                     </Panel>
 
-                    <Panel title="视频结果" subtitle={render?.videoExists ? '可播放' : '暂无视频'}>
-                      {render?.videoExists ? (
+                    <Panel title="视频结果" subtitle={render?.mode === 'full' && render.videoExists ? '可播放' : '暂无视频'}>
+                      {render?.mode === 'full' && render.videoExists ? (
                         <>
                           <video
                             key={render.videoUrl}
@@ -1022,7 +1162,7 @@ export default function App() {
         open={Boolean(tuneDialogOpen && selectedScene)}
         sceneId={selectedScene?.id ?? ''}
         sceneText={selectedConfigScene?.text ?? selectedScene?.text ?? ''}
-        disabled={anyRunning}
+        disabled={tuneLocked}
         onClose={() => setTuneDialogOpen(false)}
         onDone={async (payload) => {
           if (payload?.config) setConfig(payload.config as Config);
@@ -1038,15 +1178,13 @@ export default function App() {
         <DesignDialog
           modal={{...modal, result: modal.result ?? modalConfigScene?.designNotes ?? ''}}
           assets={modalConfigScene?.assets ?? []}
-          assetFile={assetFile}
-          assetRole={assetRole}
-          assetNotes={assetNotes}
+          assetDrafts={assetDrafts}
           assetLoading={assetLoading}
           onClose={() => setModal(null)}
           onModalChange={(nextModal) => setModal(nextModal)}
-          onAssetFileChange={setAssetFile}
-          onAssetRoleChange={setAssetRole}
-          onAssetNotesChange={setAssetNotes}
+          onAssetFilesChange={addAssetDrafts}
+          onAssetDraftChange={updateAssetDraft}
+          onAssetDraftRemove={removeAssetDraft}
           onRequestDesign={requestDesign}
         />
       ) : null}
@@ -1069,6 +1207,7 @@ const voiceCloneGridStyle: React.CSSProperties = {display: 'grid', gridTemplateC
 const smallInputStyle: React.CSSProperties = {minWidth: 0, borderRadius: 10, border: '1px solid rgba(255,255,255,0.1)', background: '#070b16', color: '#e6edf3', padding: '9px 10px', fontSize: 13};
 const fileInputStyle: React.CSSProperties = {minWidth: 0, borderRadius: 10, border: '1px solid rgba(255,255,255,0.1)', background: '#070b16', color: '#e6edf3', padding: '7px 10px', fontSize: 13};
 const textareaStyle: React.CSSProperties = {width: '100%', boxSizing: 'border-box', resize: 'vertical', borderRadius: 10, border: '1px solid rgba(255,255,255,0.1)', background: '#070b16', color: '#e6edf3', padding: 10, lineHeight: 1.5, fontSize: 14};
+const playerStyle: React.CSSProperties = {width: '100%', aspectRatio: '16 / 9', background: '#000', borderRadius: 12, overflow: 'hidden'};
 const videoStyle: React.CSSProperties = {width: '100%', maxHeight: '56vh', background: '#000', borderRadius: 12};
 const logBoxStyle: React.CSSProperties = {overflow: 'auto', background: '#05070d', borderRadius: 12, padding: 12, fontFamily: 'Consolas, monospace', fontSize: 12, lineHeight: 1.6, whiteSpace: 'pre-wrap', maxHeight: 320};
 const emptyStyle: React.CSSProperties = {display: 'grid', placeItems: 'center', minHeight: 160, color: '#9fb3c8', textAlign: 'center', fontSize: 13};

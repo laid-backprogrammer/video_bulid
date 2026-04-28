@@ -23,7 +23,7 @@ function run(name, cmd, args, opts = {}) {
     child = spawn(cmd, args, {
       cwd: __dirname,
       stdio: ['inherit', 'pipe', 'pipe'],
-      shell: isWin,
+      shell: opts.shell ?? isWin,
       env: {...process.env, ...opts.env},
     });
   } catch (error) {
@@ -52,19 +52,28 @@ function run(name, cmd, args, opts = {}) {
   return child;
 }
 
+function isRunning(child) {
+  return child && child.exitCode === null && child.signalCode === null;
+}
+
 console.log('\n🎬 Remotion 视频工作流启动器\n');
 console.log('正在启动服务...\n');
 
 // 1. 启动 Editor Server
-const editor = run('Editor', 'node', ['server.mjs']);
+const editor = run('Editor', process.execPath, ['server.mjs'], {shell: false});
 if (!editor) {
   console.error('\n❌ Editor 服务启动失败，请检查权限或单独运行 node server.mjs');
   process.exit(1);
 }
 
+let studio = null;
+let studioStarted = false;
+
 // 2. 等 Editor 启动后再启动 Studio
 setTimeout(() => {
-  const studio = run('Studio', isWin ? 'npx.cmd' : 'npx', ['remotion', 'studio']);
+  const remotionCli = path.join(__dirname, 'node_modules', '@remotion', 'cli', 'remotion-cli.js');
+  studio = run('Studio', process.execPath, [remotionCli, 'studio'], {shell: false});
+  studioStarted = Boolean(studio);
 
   // 优雅关闭
   const shutdown = () => {
@@ -80,6 +89,18 @@ setTimeout(() => {
 
 // 3. 打印访问地址
 setTimeout(() => {
+  if (!isRunning(editor) || !studioStarted || !isRunning(studio)) {
+    console.error('\n═══════════════════════════════════════════════');
+    console.error('  ❌ 服务未完整启动');
+    console.error('');
+    console.error('  请查看上方 Editor / Studio 日志定位具体错误');
+    console.error('═══════════════════════════════════════════════\n');
+    editor?.kill();
+    studio?.kill();
+    setTimeout(() => process.exit(1), 500);
+    return;
+  }
+
   console.log('\n═══════════════════════════════════════════════');
   console.log('  ✅ 所有服务已启动');
   console.log('');
