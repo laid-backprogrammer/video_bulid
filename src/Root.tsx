@@ -55,12 +55,12 @@ const fallbackScenes: SceneData[] = [
   {id: 'scene8', text: '', audioFile: '', captionsFile: '', durationInFrames: 6 * FPS, cues: [], assets: []},
 ];
 
-const normalizeScenes = (scenes: SceneData[] | undefined): SceneData[] => {
+const normalizeScenes = (scenes: SceneData[] | undefined, {useFallback = true} = {}): SceneData[] => {
   if (!Array.isArray(scenes) || scenes.length === 0) {
-    return fallbackScenes;
+    return useFallback ? fallbackScenes : [];
   }
 
-  return scenes.filter((scene) => scene.enabled !== false && scene.text.trim()).map((scene) => ({
+  const normalized = scenes.filter((scene) => scene.enabled !== false && scene.text.trim()).map((scene) => ({
     ...scene,
     audioFile: scene.audioFile ?? '',
     captionsFile: scene.captionsFile ?? '',
@@ -71,6 +71,8 @@ const normalizeScenes = (scenes: SceneData[] | undefined): SceneData[] => {
       Math.ceil(Number(scene.durationInFrames) || 0),
     ),
   }));
+
+  return normalized.length > 0 || !useFallback ? normalized : fallbackScenes;
 };
 
 const getTotalDuration = (scenes: SceneData[]) => {
@@ -128,7 +130,7 @@ export const calculateMetadata: CalculateMetadataFunction<AgentDiscussionProps> 
   try {
     const response = await fetch(staticFile('scenes-manifest.json'));
     const manifest = await response.json();
-    const scenes = normalizeScenes(manifest.scenes);
+    const scenes = normalizeScenes(manifest.scenes, {useFallback: false});
 
     return {
       durationInFrames: getTotalDuration(scenes),
@@ -146,10 +148,19 @@ export const calculateMetadata: CalculateMetadataFunction<AgentDiscussionProps> 
 };
 
 export const calculatePreviewMetadata: CalculateMetadataFunction<{sceneId: string; scenes: SceneData[]; fps: number}> = async ({props}) => {
+  const propScenes = normalizeScenes(props.scenes, {useFallback: false});
+  const propScene = propScenes.find((item) => item.id === props.sceneId) ?? propScenes[0];
+  if (propScene) {
+    return {
+      durationInFrames: Math.max(MIN_SCENE_DURATION, propScene.durationInFrames),
+      props: {sceneId: propScene.id, scenes: [propScene], fps: props.fps ?? FPS},
+    };
+  }
+
   try {
     const response = await fetch(staticFile('scenes-manifest.json'));
     const manifest = await response.json();
-    const scenes = normalizeScenes(manifest.scenes);
+    const scenes = normalizeScenes(manifest.scenes, {useFallback: false});
     const scene = scenes.find((item) => item.id === props.sceneId) ?? scenes[0] ?? fallbackScenes[0];
 
     return {

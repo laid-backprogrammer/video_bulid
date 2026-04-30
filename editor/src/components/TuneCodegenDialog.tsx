@@ -1,6 +1,7 @@
 import React, {useEffect, useMemo, useRef, useState} from 'react';
+import {assetTypeLabel, detectAssetType, MEDIA_ACCEPT} from '../app/assets';
 import {postSse} from '../services/api/client';
-import type {SceneAssetRole, SceneAssetType} from '../types';
+import type {SceneAssetRole} from '../types';
 
 type ChatMessage = {
   role: 'user' | 'assistant' | 'system';
@@ -17,23 +18,6 @@ type TuneCodegenDialogProps = {
 };
 
 type RunPhase = 'idle' | 'uploading' | 'analyzing' | 'codegen' | 'done' | 'failed';
-
-const mediaAccept = [
-  '.png,.jpg,.jpeg,.webp,.svg,image/png,image/jpeg,image/webp,image/svg+xml',
-  '.mp4,.webm,.mov,.m4v,video/mp4,video/webm,video/quicktime',
-  '.mp3,.wav,.m4a,.aac,.ogg,audio/mpeg,audio/wav,audio/mp4,audio/aac,audio/ogg',
-].join(',');
-
-const detectAssetType = (file: File): SceneAssetType => {
-  const name = file.name.toLowerCase();
-  if (file.type.startsWith('video/') || /\.(mp4|webm|mov|m4v)$/i.test(name)) return 'video';
-  if (file.type.startsWith('audio/') || /\.(mp3|wav|m4a|aac|ogg)$/i.test(name)) return 'audio';
-  return 'image';
-};
-
-const assetTypeLabel = (type?: SceneAssetType | string) => (
-  type === 'video' ? '视频' : type === 'audio' ? '音频' : '图片'
-);
 
 export function TuneCodegenDialog({open, sceneId, sceneText, disabled = false, onClose, onDone}: TuneCodegenDialogProps) {
   const [input, setInput] = useState('');
@@ -218,7 +202,7 @@ export function TuneCodegenDialog({open, sceneId, sceneText, disabled = false, o
             <div style={referenceRowStyle}>
               <input
                 type="file"
-                accept={mediaAccept}
+                accept={MEDIA_ACCEPT}
                 onChange={(event) => {
                   const file = event.target.files?.[0] ?? null;
                   setReferenceFile(file);

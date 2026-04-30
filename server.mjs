@@ -3,65 +3,45 @@ import express from 'express';
 import cors from 'cors';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import {spawn} from 'node:child_process';
-import {fileURLToPath} from 'node:url';
 import {runPipeline, globalState, subscribe, snapshot} from './src/composer/runner.mjs';
 import {readJsonFile} from './src/composer/json-utils.mjs';
 import {synthesizeLipVoice} from './src/composer/voice-synthesis.mjs';
-import {alignScenes, getAudioDurationFrames} from './src/composer/voice-alignment.mjs';
+import {alignScenes} from './src/composer/voice-alignment.mjs';
 import {runSceneAgent} from './src/composer/scene-agent.mjs';
 import {
   buildSceneAssetsMarkdown,
   createSceneAssetRecord,
   normalizeAssetRole,
   normalizeSceneAssets,
-  SCENE_ASSET_PUBLIC_DIR,
   sceneAssetsForStorage,
   validateSceneAssetFile,
 } from './src/composer/scene-assets.mjs';
+import {
+  MANIFEST_PATH,
+  PUBLIC_DIR,
+  OUTPUT_DIR,
+  SCENE_ASSET_DIR,
+  editorDist,
+  rel,
+  defaultSceneAudioFile,
+  versionedSceneAudioFile,
+  audioUrl,
+  isSceneIncludedInVideo,
+  resolveFromRoot,
+} from './src/server/paths.mjs';
+import {
+  exists,
+  latestSceneAudio,
+  captionData,
+} from './src/server/media-store.mjs';
+import {findScene, mergeConfigSceneAssets, readScript, writeScript} from './src/server/script-store.mjs';
+import {buildManifest} from './src/server/manifest-service.mjs';
+import {parseMultipartBody} from './src/server/multipart-utils.mjs';
+import {getRenderStatus, startRender} from './src/server/render-service.mjs';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 app.use(cors());
 app.use(express.json({limit: '10mb'}));
-
-const SCRIPT_PATH = path.join(__dirname, 'src/composer/script.json');
-const MANIFEST_PATH = path.join(__dirname, 'public/scenes-manifest.json');
-const PUBLIC_DIR = path.join(__dirname, 'public');
-const OUTPUT_DIR = path.join(__dirname, 'output');
-const SCENE_ASSET_DIR = path.join(__dirname, SCENE_ASSET_PUBLIC_DIR);
-const editorDist = path.join(__dirname, 'editor/dist');
-const SCENE_TAIL_PADDING_SECONDS = 0.2;
-
-const renderState = {
-  running: false,
-  exitCode: null,
-  startTime: null,
-  endTime: null,
-  outputFile: 'output/video.mp4',
-  mode: 'full',
-  sceneId: null,
-  progress: null,
-  logs: [],
-  error: null,
-};
-
-const appendRenderLog = (line) => {
-  renderState.logs.push(line);
-  if (renderState.logs.length > 200) renderState.logs.shift();
-};
-
-const failRender = (message, exitCode = null) => {
-  renderState.running = false;
-  renderState.exitCode = exitCode;
-  renderState.endTime = Date.now();
-  renderState.error = message;
-  renderState.progress = {
-    ...(renderState.progress ?? {rendered: 0, total: null, encoded: 0, percent: 0}),
-    phase: 'failed',
-  };
-  appendRenderLog(`Render failed: ${message}`);
-};
 
 const ttsState = {
   running: false,
@@ -132,134 +112,7 @@ const createTtsProgress = (sceneId) => (event) => {
   }, `${sceneId}: ${event.message ?? event.stage ?? 'TTS 更新'}`);
 };
 
-async function outputExists(filePath) {
-  if (!filePath) return false;
-  return fs.access(path.join(__dirname, filePath)).then(() => true).catch(() => false);
-}
-
-async function listPreviewVideos() {
-  let entries;
-  try {
-    entries = await fs.readdir(OUTPUT_DIR, {withFileTypes: true});
-  } catch (e) {
-    if (e.code === 'ENOENT') return {};
-    throw e;
-  }
-
-  const previews = {};
-  await Promise.all(entries.map(async (entry) => {
-    if (!entry.isFile()) return;
-    const match = entry.name.match(/^(scene\d+)\.preview\.mp4$/i);
-    if (!match) return;
-    const sceneId = match[1];
-    const outputFile = rel('output', entry.name);
-    const stat = await fs.stat(path.join(OUTPUT_DIR, entry.name)).catch(() => null);
-    previews[sceneId] = {
-      outputFile,
-      videoUrl: `/${outputFile}?t=${Math.round(stat?.mtimeMs ?? Date.now())}`,
-      mtimeMs: stat?.mtimeMs ?? null,
-    };
-  }));
-  return previews;
-}
-
-const rel = (...parts) => path.join(...parts).replace(/\\/g, '/');
-const exists = async (filePath) => fs.access(filePath).then(() => true).catch(() => false);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-const defaultSceneAudioFile = (sceneId) => rel('public', 'voiceover', `${sceneId}.mp3`);
-const versionedSceneAudioFile = (sceneId) => rel('public', 'voiceover', `${sceneId}.${Date.now()}.mp3`);
-const audioUrl = (audioFile) => `/${audioFile.replace(/\\/g, '/')}`;
-const isSceneIncludedInVideo = (scene) => scene?.enabled !== false && String(scene?.text ?? '').trim().length > 0;
-
-const isSceneAudioFile = (sceneId, fileName) => (
-  fileName === `${sceneId}.mp3`
-  || fileName === `${sceneId}.wav`
-  || (
-    fileName.startsWith(`${sceneId}.`)
-    && (fileName.endsWith('.mp3') || fileName.endsWith('.wav'))
-    && !fileName.includes('.tmp.')
-    && !fileName.includes('.download.')
-  )
-);
-
-async function latestSceneAudio(sceneId) {
-  const dir = path.join(PUBLIC_DIR, 'voiceover');
-  let entries;
-  try {
-    entries = await fs.readdir(dir, {withFileTypes: true});
-  } catch (e) {
-    if (e.code === 'ENOENT') return null;
-    throw e;
-  }
-
-  const files = [];
-  for (const entry of entries) {
-    if (!entry.isFile() || !isSceneAudioFile(sceneId, entry.name)) continue;
-    const absPath = path.join(dir, entry.name);
-    const stat = await fs.stat(absPath).catch(() => null);
-    if (!stat) continue;
-    files.push({
-      absPath,
-      relPath: rel('public', 'voiceover', entry.name),
-      mtimeMs: stat.mtimeMs,
-    });
-  }
-
-  files.sort((a, b) => b.mtimeMs - a.mtimeMs);
-  return files[0] ?? null;
-}
-
-async function readScript() {
-  return readJsonFile(SCRIPT_PATH);
-}
-
-async function findScene(sceneId) {
-  const script = await readScript();
-  const scene = script.scenes.find((item) => item.id === sceneId);
-  if (!scene) throw new Error(`Scene not found: ${sceneId}`);
-  return {script, scene};
-}
-
-async function captionData(sceneId) {
-  const captionsFile = path.join(PUBLIC_DIR, 'captions', `${sceneId}.json`);
-  if (!(await exists(captionsFile))) return null;
-  return readJsonFile(captionsFile);
-}
-
-async function buildManifest() {
-  const script = await readScript();
-  const scenes = [];
-
-  for (const scene of script.scenes.filter(isSceneIncludedInVideo)) {
-    const audio = await latestSceneAudio(scene.id);
-    const audioFile = audio?.relPath ?? '';
-    const captionsFile = rel('public', 'captions', `${scene.id}.json`);
-    const captionPath = path.join(__dirname, captionsFile);
-    const cap = (await exists(captionPath)) ? await readJsonFile(captionPath) : null;
-    const baseDurationInFrames = cap?.durationInFrames
-      ?? (audio ? await getAudioDurationFrames(audioFile, script.fps) : null)
-      ?? script.fps * 4;
-    const durationInFrames = baseDurationInFrames + Math.round((script.fps ?? 30) * SCENE_TAIL_PADDING_SECONDS);
-
-    if (audio || cap) {
-      scenes.push({
-        id: scene.id,
-        text: scene.text,
-        audioFile,
-        captionsFile,
-        durationInFrames,
-        cues: cap?.cues ?? [],
-        assets: normalizeSceneAssets(scene.assets),
-        enabled: scene.enabled !== false,
-      });
-    }
-  }
-
-  const manifest = {fps: script.fps, scenes};
-  await fs.writeFile(MANIFEST_PATH, JSON.stringify(manifest, null, 2), 'utf-8');
-  return manifest;
-}
 
 async function getScenesStatus() {
   const script = await readScript();
@@ -334,6 +187,21 @@ const sceneTimingPrompt = async (sceneId) => {
   };
 };
 
+const compactTimingForDesign = (timing) => {
+  if (!timing?.summary) return 'No aligned timing available.';
+  const lines = String(timing.summary).split(/\r?\n/);
+  const header = lines.filter((line) => /^(fps|duration|alignmentSource|wordTimingSource):/.test(line)).join('\n');
+  const cueLines = lines
+    .filter((line) => /^cue\s+\d+:/i.test(line))
+    .slice(0, 8)
+    .join('\n');
+  return [
+    header,
+    cueLines,
+    timing.durationSeconds ? `Use this only to choose broad beats; do not copy every word timing into the design. duration=${timing.durationSeconds}s` : '',
+  ].filter(Boolean).join('\n');
+};
+
 const sceneAssetsPrompt = async (sceneId, mentionText = '') => {
   const {scene} = await findScene(sceneId);
   return buildSceneAssetsMarkdown(scene.assets, {
@@ -344,6 +212,74 @@ const sceneAssetsPrompt = async (sceneId, mentionText = '') => {
 
 const ASSET_MENTION_SYSTEM_NOTE = '素材 @ 提及规则：用户必须使用 @alias 或 @asset_id 指定某张素材，模型只能使用本轮上下文中列出的已 @ 提及素材；没有 @ 提及的上传素材不得使用，也不会作为可用素材上下文提供。图片素材必须区分 reference/render/both：reference 只参考不入画，render/both 可入画；视频和音频默认是可插入素材。必须在方案中保留素材 @alias，并按用户描述安排视频位置、音频触发时机、层级、运动路径或背景/主体用途。';
 
+const CONCISE_DESIGN_SYSTEM_PROMPT = [
+  '你是 Remotion 单场景视觉 brief 设计师。',
+  '输出必须短，只保留会影响代码生成的决策，不写施工手册。',
+  '严格限制：最多 6 个小节，最多 18 条 bullet，总字数尽量控制在 500-900 中文字。',
+  '不要输出逐词时间轴、完整字幕表、图层顺序清单、CSS 大段代码、staticFile path、Remotion 代码、精确 x/y/width/height 清单，除非用户明确给了这些硬约束。',
+  '不要把一句话文案扩写成百科式方案；文案越短，brief 越短。',
+  '只给关键内容：1. 有效用户要求 2. 布局/构图 3. 必用/禁用素材 4. 视觉风格 5. 关键节奏 6. 字幕安全区。',
+  '动画节奏只写 2-4 个阶段，用 cue/开头/中段/结尾描述；不要列出每个词块。',
+  '媒体素材必须按 @alias 或 @asset_id 说明；没有 @ 提及的素材不要纳入方案。',
+  ASSET_MENTION_SYSTEM_NOTE,
+].join('\n');
+
+const compactStoredNotes = (notes = '', {maxChars = 2400} = {}) => {
+  const text = String(notes || '').trim();
+  if (text.length <= maxChars) return text;
+  const blocks = text.split(/(?=## LLM 对话微调 )/g).map((block) => block.trim()).filter(Boolean);
+  const tail = blocks.slice(-3).join('\n\n');
+  return (tail.length > maxChars ? tail.slice(-maxChars) : tail).trim();
+};
+
+const compactRecentConversation = (history = [], {maxItems = 4, maxChars = 1200} = {}) => {
+  if (!Array.isArray(history)) return '';
+  const lines = history
+    .filter((item) => item?.content)
+    .slice(-maxItems)
+    .map((item) => `${item.role === 'assistant' ? 'Assistant' : 'User'}: ${String(item.content ?? '').replace(/\s+/g, ' ').trim()}`);
+  return lines.join('\n').slice(0, maxChars).trim();
+};
+
+const previousDesignContext = (currentDesignNotes = '', prompt = '') => {
+  if (String(prompt || '').trim()) {
+    return '本轮已有明确用户要求：旧设计方案仅用于避免遗漏素材/字幕安全区，不作为风格来源；冲突时必须丢弃旧风格。';
+  }
+  return String(currentDesignNotes || '(empty)').slice(0, 600);
+};
+
+const normalizeDesignBrief = (text = '', fallback = '', {maxChars = 1100, maxLines = 24} = {}) => {
+  const source = String(text || fallback || '').trim();
+  if (!source) return String(fallback || '').trim();
+
+  const withoutNoise = source
+    .replace(/```[\s\S]*?```/g, '')
+    .replace(/\|.*\|/g, '')
+    .replace(/^[-*]\s*(?:\d+\.\d+s|[0-9]+f|时间|帧数|词块).*$\n?/gim, '');
+  const stopIndex = withoutNoise.search(/^##\s*\d+\.?\s*(?:字幕词块|图层顺序|Remotion|实现提示|时长适配|完整时间轴)/im);
+  const body = stopIndex > 0 ? withoutNoise.slice(0, stopIndex) : withoutNoise;
+  const lines = body
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !/^(?:---+|###?\s*\d+\.\d+|[|:：\-\s\d.f秒s]+)$/.test(line))
+    .filter((line) => !/(staticFile path|Remotion 选择建议|渲染方式|最终布局|入场动画|x:|y:|width:|height:|z-index|object-fit)/i.test(line));
+
+  const kept = [];
+  for (const line of lines) {
+    const normalized = line
+      .replace(/^#{1,6}\s*/, '## ')
+      .replace(/\s+/g, ' ')
+      .slice(0, 160);
+    if (!normalized || kept.includes(normalized)) continue;
+    kept.push(normalized);
+    if (kept.length >= maxLines || kept.join('\n').length >= maxChars) break;
+  }
+
+  const compact = kept.join('\n').slice(0, maxChars).trim();
+  return compact || source.slice(0, maxChars).trim();
+};
+
 app.get('/api/config', async (req, res) => {
   try {
     res.json(await readScript());
@@ -352,99 +288,17 @@ app.get('/api/config', async (req, res) => {
   }
 });
 
-const mergeConfigSceneAssets = (incomingScript, existingScript) => {
-  if (!Array.isArray(incomingScript?.scenes) || !Array.isArray(existingScript?.scenes)) {
-    return incomingScript;
-  }
-
-  const existingById = new Map(existingScript.scenes.map((scene) => [scene.id, scene]));
-  return {
-    ...incomingScript,
-    scenes: incomingScript.scenes.map((scene) => {
-      const existingScene = existingById.get(scene.id);
-      const mergedAssets = new Map();
-      for (const asset of sceneAssetsForStorage(existingScene?.assets)) {
-        mergedAssets.set(asset.id, asset);
-      }
-      for (const asset of sceneAssetsForStorage(scene.assets)) {
-        mergedAssets.set(asset.id, asset);
-      }
-      return {
-        ...scene,
-        enabled: scene.enabled ?? existingScene?.enabled,
-        assets: [...mergedAssets.values()],
-      };
-    }),
-  };
-};
-
 app.post('/api/config', async (req, res) => {
   try {
     const existingScript = await readScript().catch(() => null);
     const nextScript = mergeConfigSceneAssets(req.body, existingScript);
-    await fs.writeFile(SCRIPT_PATH, JSON.stringify(nextScript, null, 2), 'utf-8');
+    await writeScript(nextScript);
     await buildManifest().catch(() => {});
     res.json({success: true, config: nextScript});
   } catch (e) {
     res.status(500).json({error: e.message});
   }
 });
-
-const parseContentDisposition = (value = '') => {
-  const result = {};
-  for (const part of value.split(';')) {
-    const [rawKey, ...rawValue] = part.trim().split('=');
-    if (!rawKey || rawValue.length === 0) continue;
-    result[rawKey.toLowerCase()] = rawValue.join('=').trim().replace(/^"|"$/g, '');
-  }
-  return result;
-};
-
-const parseMultipartBody = (buffer, contentType) => {
-  const boundaryMatch = String(contentType || '').match(/boundary=(?:"([^"]+)"|([^;]+))/i);
-  if (!boundaryMatch) throw new Error('Missing multipart boundary');
-  const boundary = Buffer.from(`--${boundaryMatch[1] || boundaryMatch[2]}`);
-  const fields = {};
-  const files = {};
-  let cursor = buffer.indexOf(boundary);
-
-  while (cursor !== -1) {
-    cursor += boundary.length;
-    if (buffer.slice(cursor, cursor + 2).toString('latin1') === '--') break;
-    if (buffer.slice(cursor, cursor + 2).toString('latin1') === '\r\n') cursor += 2;
-
-    const headerEnd = buffer.indexOf(Buffer.from('\r\n\r\n'), cursor);
-    if (headerEnd === -1) break;
-    const headerText = buffer.slice(cursor, headerEnd).toString('utf8');
-    const headers = {};
-    for (const line of headerText.split('\r\n')) {
-      const index = line.indexOf(':');
-      if (index > 0) headers[line.slice(0, index).trim().toLowerCase()] = line.slice(index + 1).trim();
-    }
-
-    const nextBoundary = buffer.indexOf(boundary, headerEnd + 4);
-    if (nextBoundary === -1) break;
-    let content = buffer.slice(headerEnd + 4, nextBoundary);
-    if (content.slice(-2).toString('latin1') === '\r\n') content = content.slice(0, -2);
-
-    const disposition = parseContentDisposition(headers['content-disposition']);
-    if (disposition.name) {
-      if (disposition.filename) {
-        files[disposition.name] = {
-          filename: path.basename(disposition.filename),
-          contentType: headers['content-type'] || 'application/octet-stream',
-          buffer: content,
-        };
-      } else {
-        fields[disposition.name] = content.toString('utf8');
-      }
-    }
-
-    cursor = nextBoundary;
-  }
-
-  return {fields, files};
-};
 
 const uploadLipVoiceReference = async ({baseUrl, sign, file, name, describe}) => {
   const form = new FormData();
@@ -501,7 +355,7 @@ app.post('/api/tts/clone', express.raw({type: 'multipart/form-data', limit: '55m
       ttsVoiceName: data.name,
       ttsVoiceDescribe: data.describe,
     };
-    await fs.writeFile(SCRIPT_PATH, JSON.stringify(nextScript, null, 2), 'utf-8');
+    await writeScript(nextScript);
     res.json({success: true, data, config: nextScript});
   } catch (e) {
     res.status(400).json({error: e.message});
@@ -534,7 +388,7 @@ app.post('/api/scene/assets', express.raw({type: 'multipart/form-data', limit: '
         : scene
     ));
     const nextScript = {...script, scenes: nextScenes};
-    await fs.writeFile(SCRIPT_PATH, JSON.stringify(nextScript, null, 2), 'utf-8');
+    await writeScript(nextScript);
     await buildManifest().catch(() => {});
     res.json({success: true, asset: normalizeSceneAssets([asset], {includeUrl: true})[0], config: nextScript});
   } catch (e) {
@@ -554,7 +408,7 @@ app.post('/api/scene/assets/delete', async (req, res) => {
     const asset = assets.find((item) => item.id === assetId);
     if (!asset) throw new Error(`Asset not found: ${assetId}`);
 
-    const absAssetPath = path.resolve(__dirname, asset.file);
+    const absAssetPath = resolveFromRoot(asset.file);
     const allowedRoot = path.resolve(SCENE_ASSET_DIR, String(sceneId));
     const relativeAssetPath = path.relative(allowedRoot, absAssetPath);
     if (relativeAssetPath.startsWith('..') || path.isAbsolute(relativeAssetPath)) {
@@ -570,7 +424,7 @@ app.post('/api/scene/assets/delete', async (req, res) => {
         : scene
     ));
     const nextScript = {...script, scenes: nextScenes};
-    await fs.writeFile(SCRIPT_PATH, JSON.stringify(nextScript, null, 2), 'utf-8');
+    await writeScript(nextScript);
     await buildManifest().catch(() => {});
     res.json({success: true, config: nextScript});
   } catch (e) {
@@ -605,7 +459,7 @@ app.post('/api/manifest/rebuild', async (req, res) => {
 
 async function getLlmApiKey() {
   try {
-    const script = await readJsonFile(SCRIPT_PATH);
+    const script = await readScript();
     return script.llmApiKey || script.transcribeApiKey || process.env.OPENAI_API_KEY || null;
   } catch {
     return process.env.OPENAI_API_KEY || null;
@@ -642,7 +496,7 @@ function sendSse(res, event, payload) {
 }
 
 async function getLlmSettings() {
-  const script = await readJsonFile(SCRIPT_PATH).catch(() => ({}));
+  const script = await readScript().catch(() => ({}));
   const apiKey = script.llmApiKey || script.transcribeApiKey || process.env.OPENAI_API_KEY || null;
   let baseUrl = (
     process.env.OPENAI_BASE_URL
@@ -658,9 +512,10 @@ async function getLlmSettings() {
   };
 }
 
-async function streamFallbackText(res, fallback, provider = 'fallback') {
+async function streamFallbackText(res, fallback, provider = 'fallback', transformText = null) {
   sendSse(res, 'status', {message: '未配置 LLM API Key，使用本地兜底内容', provider});
-  const chunks = fallback.match(/.{1,18}/gs) ?? [fallback];
+  const finalText = transformText ? transformText(fallback) : fallback;
+  const chunks = finalText.match(/.{1,18}/gs) ?? [finalText];
   let text = '';
   for (const chunk of chunks) {
     text += chunk;
@@ -671,7 +526,7 @@ async function streamFallbackText(res, fallback, provider = 'fallback') {
   return {text, thinking: '', provider};
 }
 
-async function streamNonStreamingChat(res, settings, selectedModel, system, user, reasonText = '') {
+async function streamNonStreamingChat(res, settings, selectedModel, system, user, reasonText = '', transformText = null) {
   sendSse(res, 'status', {
     message: reasonText ? '流式响应不可用，切换为普通响应' : '使用普通响应生成 LLM 内容',
     provider: 'openai',
@@ -704,7 +559,9 @@ async function streamNonStreamingChat(res, settings, selectedModel, system, user
     throw new Error(`LLM 请求失败（model=${selectedModel}）：${message}`);
   }
 
-  const fullText = data?.choices?.[0]?.message?.content || '';
+  const fullText = transformText
+    ? transformText(data?.choices?.[0]?.message?.content || '')
+    : data?.choices?.[0]?.message?.content || '';
   const chunks = fullText.match(/.{1,24}/gs) ?? [fullText];
   let text = '';
   for (const chunk of chunks) {
@@ -716,10 +573,10 @@ async function streamNonStreamingChat(res, settings, selectedModel, system, user
   return {text, thinking: '', provider: 'openai'};
 }
 
-async function streamLlmChat(res, {system, user, fallback, model}) {
+async function streamLlmChat(res, {system, user, fallback, model, transformText = null}) {
   const settings = await getLlmSettings();
   if (!settings.apiKey) {
-    return streamFallbackText(res, fallback);
+    return streamFallbackText(res, fallback, 'fallback', transformText);
   }
 
   const selectedModel = model || settings.model;
@@ -751,7 +608,7 @@ async function streamLlmChat(res, {system, user, fallback, model}) {
   if (!response.ok) {
     const errorText = await response.text();
     if (/unsupported|not support|stream/i.test(errorText)) {
-      return streamNonStreamingChat(res, settings, selectedModel, system, user, errorText);
+      return streamNonStreamingChat(res, settings, selectedModel, system, user, errorText, transformText);
     }
     throw new Error(`LLM 请求失败（model=${selectedModel}）：${errorText}`);
   }
@@ -782,7 +639,9 @@ async function streamLlmChat(res, {system, user, fallback, model}) {
     }
     if (contentDelta) {
       text += contentDelta;
-      sendSse(res, 'token', {delta: contentDelta, text});
+      if (!transformText) {
+        sendSse(res, 'token', {delta: contentDelta, text});
+      }
     }
     return false;
   };
@@ -795,15 +654,19 @@ async function streamLlmChat(res, {system, user, fallback, model}) {
     buffer = lines.pop() ?? '';
     for (const line of lines) {
       if (consumeLine(line)) {
-        sendSse(res, 'done', {text, thinking, provider: 'openai'});
-        return {text, thinking, provider: 'openai'};
+        const finalText = transformText ? transformText(text) : text;
+        if (transformText) sendSse(res, 'token', {delta: finalText, text: finalText, provider: 'openai'});
+        sendSse(res, 'done', {text: finalText, thinking, provider: 'openai'});
+        return {text: finalText, thinking, provider: 'openai'};
       }
     }
   }
 
   if (buffer.trim()) consumeLine(buffer.trim());
-  sendSse(res, 'done', {text, thinking, provider: 'openai'});
-  return {text, thinking, provider: 'openai'};
+  const finalText = transformText ? transformText(text) : text;
+  if (transformText) sendSse(res, 'token', {delta: finalText, text: finalText, provider: 'openai'});
+  sendSse(res, 'done', {text: finalText, thinking, provider: 'openai'});
+  return {text: finalText, thinking, provider: 'openai'};
 }
 
 app.post('/api/scene/tune-codegen/stream', async (req, res) => {
@@ -827,18 +690,14 @@ app.post('/api/scene/tune-codegen/stream', async (req, res) => {
 
     const timing = await sceneTimingPrompt(sceneId);
     const assetContext = await sceneAssetsPrompt(sceneId, prompt);
-    const conversation = Array.isArray(history)
-      ? history.slice(-12).map((item) => `${item.role === 'assistant' ? 'Assistant' : 'User'}: ${item.content ?? ''}`).join('\n')
-      : '';
-    const currentNotes = scene.tuningNotes ?? '';
+    const conversation = compactRecentConversation(history);
     const tuningBlock = [
-      currentNotes,
+      `## 当前微调要求 ${new Date().toISOString()}`,
       '',
-      `## LLM 对话微调 ${new Date().toISOString()}`,
-      conversation ? `\n### 对话上下文\n${conversation}` : '',
-      `\n### 本轮用户要求\n${prompt.trim()}`,
+      `### 本轮用户要求\n${prompt.trim()}`,
+      conversation ? `\n### 最近对话摘要（仅本轮附近）\n${conversation}` : '',
       '',
-      '执行要求：结合精确字幕时间轴、现有 designNotes 和上述对话要求，重新生成 Remotion 场景代码；优先修正预览中指出的画面、节奏、字幕和动效问题。',
+      '执行要求：本轮用户要求具有最高优先级，覆盖旧 tuningNotes、旧 designNotes 和之前生成代码中的冲突风格/布局/细节。不要累积历史对话，不要沿用旧风格，除非本轮明确要求保留。',
     ].filter(Boolean).join('\n').trim();
 
     const nextScript = {
@@ -847,7 +706,7 @@ app.post('/api/scene/tune-codegen/stream', async (req, res) => {
       scenes: script.scenes.map((item) => item.id === sceneId ? {...item, tuningNotes: tuningBlock} : item),
     };
     delete nextScript.codegenCliCommand;
-    await fs.writeFile(SCRIPT_PATH, JSON.stringify(nextScript, null, 2), 'utf-8');
+    await writeScript(nextScript);
     sendSse(res, 'status', {message: '已保存本轮微调要求，开始让 LLM 分析修改方案', provider: 'openai'});
 
     const fallback = [
@@ -865,9 +724,9 @@ app.post('/api/scene/tune-codegen/stream', async (req, res) => {
         `sceneId: ${sceneId}`,
         `用户本轮要求: ${prompt.trim()}`,
         '',
-        `现有 tuningNotes:\n${currentNotes || '(empty)'}`,
+        '旧 tuningNotes 已被本轮要求替换，不要把旧对话当作风格来源。',
         '',
-        `对话上下文:\n${conversation || '(empty)'}`,
+        `最近对话摘要:\n${conversation || '(empty)'}`,
         '',
         `Media assets and visual references:\n${assetContext}`,
         '',
@@ -937,15 +796,15 @@ app.post('/api/scene/design', async (req, res) => {
     const preciseDuration = timing.durationSeconds ?? (durationMs ? Number((durationMs / 1000).toFixed(3)) : null);
 
     const fallback = [
-      `## ${sceneId} 视觉设计方案`,
+      `## ${sceneId} 简洁视觉 brief`,
       '',
-      '- **画面基调**：科技感深色背景，辅以粒子动效',
-      '- **主体元素**：核心关键词居中放大，配合辅助图标',
-      '- **色彩方案**：主色 #00e5ff，辅色 #ff79c6，背景 #0b1020',
-      '- **动画节奏**：按实际 cue 和词块时间轴切分，不按整数秒粗切',
+      prompt?.trim() ? `- **用户要求**：${prompt.trim()}` : '- **用户要求**：围绕文案做清晰开场视觉',
+      '- **布局**：主体信息居中，必要素材按用户指定位置入画',
+      '- **素材**：只使用本轮 @ 提及素材；未 @ 提及素材禁用',
+      '- **风格**：深色科技感，少量蓝紫光晕，避免堆叠过多装饰',
+      '- **节奏**：开头建立主题，中段稳定展示，结尾保持问题定格',
       '- **字幕位置**：底部居中，避免遮挡主体',
-      `- **时长适配**：${preciseDuration ? `${preciseDuration}s` : '未知'}，以实际音频/字幕时间轴为准`,
-      prompt?.trim() ? `- **用户要求**：${prompt.trim()}` : '',
+      `- **时长**：${preciseDuration ? `${preciseDuration}s` : '以实际字幕时间轴为准'}`,
     ].join('\n');
 
     const apiKey = await getLlmApiKey();
@@ -954,10 +813,10 @@ app.post('/api/scene/design', async (req, res) => {
     }
 
     const design = await llmChat(
-      `你是 Remotion 视频视觉设计师。根据一段短视频文案、媒体素材角色、精确音频时长和 cue/词块时间轴，给出具体的单场景视觉设计方案。不要把时长四舍五入到整数秒；必须使用 x.x 或 x.xxx 秒和帧数来描述节奏。必须明确媒体素材使用策略：图片 reference 只作风格/构图参考，图片 render/both、视频、音频可作为插入素材进入 Remotion。${ASSET_MENTION_SYSTEM_NOTE} 方案必须包含：画面基调、主体元素、媒体素材使用策略、色彩方案、动画节奏（百分比 + 精确秒/帧）、字幕位置、时长适配建议。请用 Markdown 输出，语言简洁专业。`,
-      `sceneId: ${sceneId}\n文案: ${text}\n用户设计要求: ${prompt || '(empty)'}\n当前设计方案: ${currentDesignNotes || '(empty)'}\n精确时长: ${preciseDuration ? `${preciseDuration}秒` : '未知'}\n\nMedia assets and visual references:\n${assetContext}\n\n对齐后的字幕/词块时间轴:\n${timing.summary}`,
+      CONCISE_DESIGN_SYSTEM_PROMPT,
+      `sceneId: ${sceneId}\n文案: ${text}\n用户设计要求: ${prompt || '(empty)'}\n旧设计方案处理规则: ${previousDesignContext(currentDesignNotes, prompt)}\n精确时长: ${preciseDuration ? `${preciseDuration}秒` : '未知'}\n\nMedia assets and visual references:\n${assetContext}\n\n精简时间轴，禁止逐词复述:\n${compactTimingForDesign(timing)}`,
     );
-    res.json({success: true, design: design || fallback, provider: 'openai'});
+    res.json({success: true, design: normalizeDesignBrief(design, fallback), provider: 'openai'});
   } catch (e) {
     res.status(500).json({error: e.message});
   }
@@ -978,21 +837,22 @@ app.post('/api/scene/design/stream', async (req, res) => {
     const preciseDuration = timing.durationSeconds ?? (durationMs ? Number((durationMs / 1000).toFixed(3)) : null);
 
     const fallback = [
-      `## ${sceneId} 视觉设计方案`,
+      `## ${sceneId} 简洁视觉 brief`,
       '',
-      '- **画面基调**：科技感深色背景，辅以粒子动效',
-      '- **主体元素**：核心关键词居中放大，配合辅助图标',
-      '- **色彩方案**：主色 #00e5ff，辅色 #ff79c6，背景 #0b1020',
-      '- **动画节奏**：按实际 cue 和词块时间轴切分，不按整数秒粗切',
+      prompt?.trim() ? `- **用户要求**：${prompt.trim()}` : '- **用户要求**：围绕文案做清晰开场视觉',
+      '- **布局**：主体信息居中，必要素材按用户指定位置入画',
+      '- **素材**：只使用本轮 @ 提及素材；未 @ 提及素材禁用',
+      '- **风格**：深色科技感，少量蓝紫光晕，避免堆叠过多装饰',
+      '- **节奏**：开头建立主题，中段稳定展示，结尾保持问题定格',
       '- **字幕位置**：底部居中，避免遮挡主体',
-      `- **时长适配**：${preciseDuration ? `${preciseDuration}s` : '未知'}，以实际音频/字幕时间轴为准`,
-      prompt?.trim() ? `- **用户要求**：${prompt.trim()}` : '',
+      `- **时长**：${preciseDuration ? `${preciseDuration}s` : '以实际字幕时间轴为准'}`,
     ].join('\n');
 
     await streamLlmChat(res, {
       fallback,
-      system: `你是 Remotion 视频视觉设计师。根据用户设计要求、媒体素材角色、短视频文案、精确音频时长和 cue/词块时间轴，给出具体的单场景视觉设计方案。不要把时长四舍五入到整数秒；必须使用 x.x 或 x.xxx 秒和帧数来描述节奏。方案必须明确说明图片 reference/render/both 如何处理，视频如何入画，音频在什么帧触发；如果存在可插入媒体，必须设计具体位置、层级、入场/播放方式给 Remotion 代码使用。${ASSET_MENTION_SYSTEM_NOTE} 方案必须包含：画面基调、主体元素、媒体素材使用策略、色彩方案、动画节奏（百分比 + 精确秒/帧）、字幕位置、时长适配建议。请用 Markdown 输出，语言简洁专业。`,
-      user: `sceneId: ${sceneId}\n文案: ${text}\n用户设计要求: ${prompt || '(empty)'}\n当前设计方案: ${currentDesignNotes || '(empty)'}\n精确时长: ${preciseDuration ? `${preciseDuration}秒` : '未知'}\n\nMedia assets and visual references:\n${assetContext}\n\n对齐后的字幕/词块时间轴:\n${timing.summary}`,
+      system: CONCISE_DESIGN_SYSTEM_PROMPT,
+      user: `sceneId: ${sceneId}\n文案: ${text}\n用户设计要求: ${prompt || '(empty)'}\n旧设计方案处理规则: ${previousDesignContext(currentDesignNotes, prompt)}\n精确时长: ${preciseDuration ? `${preciseDuration}秒` : '未知'}\n\nMedia assets and visual references:\n${assetContext}\n\n精简时间轴，禁止逐词复述:\n${compactTimingForDesign(timing)}`,
+      transformText: (text) => normalizeDesignBrief(text, fallback),
     });
   } catch (e) {
     sendSse(res, 'error', {error: e.message});
@@ -1085,7 +945,7 @@ app.post('/api/tts', async (req, res) => {
     const {script, scene} = await findScene(sceneId);
     const existingAudio = await latestSceneAudio(scene.id);
     const outputAudioFile = force && existingAudio ? versionedSceneAudioFile(scene.id) : defaultSceneAudioFile(scene.id);
-    const outputAudioPath = path.join(__dirname, outputAudioFile);
+    const outputAudioPath = resolveFromRoot(outputAudioFile);
     updateTtsState({
       running: true,
       mode: 'scene',
@@ -1187,7 +1047,7 @@ app.post('/api/tts/all', async (req, res) => {
     for (const scene of script.scenes.filter(isSceneIncludedInVideo)) {
       const existingAudio = await latestSceneAudio(scene.id);
       const outputAudioFile = force && existingAudio ? versionedSceneAudioFile(scene.id) : defaultSceneAudioFile(scene.id);
-      const outputAudioPath = path.join(__dirname, outputAudioFile);
+      const outputAudioPath = resolveFromRoot(outputAudioFile);
       updateTtsState({
         currentSceneId: scene.id,
         currentIndex: results.length + 1,
@@ -1314,109 +1174,18 @@ app.get('/api/pipeline/stream', (req, res) => {
 });
 
 app.get('/api/render/status', async (req, res) => {
-  const videoExists = await outputExists(renderState.outputFile);
-  const previewVideos = await listPreviewVideos();
-  res.json({
-    ...renderState,
-    videoExists,
-    videoUrl: videoExists ? `/${renderState.outputFile}?t=${renderState.endTime ?? Date.now()}` : null,
-    previewVideos,
-  });
+  res.json(await getRenderStatus());
 });
 
 app.post('/api/render', async (req, res) => {
   const {sceneId = null} = req.body || {};
   console.log(`[api/render] start mode=${sceneId ? 'scene' : 'full'} scene=${sceneId ?? '-'}`);
-  if (renderState.running) return res.status(409).json({error: 'Render is already running', status: renderState});
-
   try {
-    await buildManifest();
-    await fs.mkdir(OUTPUT_DIR, {recursive: true});
+    const status = await startRender({sceneId});
+    res.json({success: true, status});
   } catch (e) {
-    failRender(`准备渲染失败：${e.message}`);
-    return res.status(500).json({error: e.message, status: renderState});
+    res.status(e.status ?? 500).json({error: e.message, status: e.state ?? await getRenderStatus()});
   }
-
-  const mode = sceneId ? 'scene' : 'full';
-  const outputFile = sceneId ? rel('output', `${sceneId}.preview.mp4`) : rel('output', 'video.mp4');
-  const composition = sceneId ? 'PreviewScene' : 'AgentDiscussion';
-  const remotionCli = path.join(__dirname, 'node_modules', '@remotion', 'cli', 'remotion-cli.js');
-  const args = [remotionCli, 'render', composition, outputFile];
-  let propsFile = null;
-  if (sceneId) {
-    propsFile = path.join(OUTPUT_DIR, `${sceneId}.props.json`);
-    await fs.writeFile(propsFile, JSON.stringify({sceneId}), 'utf-8');
-    args.push('--props', propsFile);
-  }
-
-  renderState.running = true;
-  renderState.exitCode = null;
-  renderState.startTime = Date.now();
-  renderState.endTime = null;
-  renderState.outputFile = outputFile;
-  renderState.mode = mode;
-  renderState.sceneId = sceneId;
-  renderState.progress = {rendered: 0, total: null, encoded: 0, percent: 0, phase: 'starting'};
-  renderState.error = null;
-  renderState.logs = [];
-
-  await fs.rm(path.join(__dirname, outputFile), {force: true}).catch(() => {});
-
-  const command = process.execPath;
-  let child;
-  try {
-    child = spawn(command, args, {
-      cwd: __dirname,
-      shell: false,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-  } catch (error) {
-    failRender(`启动渲染进程失败：${error.message}`);
-    if (propsFile) fs.rm(propsFile, {force: true}).catch(() => {});
-    return res.status(500).json({error: error.message, status: renderState});
-  }
-
-  const push = (chunk) => {
-    chunk.toString().split(/\r?\n/).filter(Boolean).forEach((line) => {
-      const rendered = line.match(/Rendered\s+(\d+)\/(\d+)/i);
-      const encoded = line.match(/Encoded\s+(\d+)\/(\d+)/i);
-      if (rendered) {
-        const current = Number(rendered[1]);
-        const total = Number(rendered[2]);
-        renderState.progress = {rendered: current, total, encoded: renderState.progress?.encoded ?? 0, percent: Math.round((current / total) * 100), phase: 'rendering'};
-      } else if (encoded) {
-        const current = Number(encoded[1]);
-        const total = Number(encoded[2]);
-        renderState.progress = {rendered: total, total, encoded: current, percent: Math.round((current / total) * 100), phase: 'encoding'};
-      } else if (/Getting composition/i.test(line)) {
-        renderState.progress = {...renderState.progress, phase: 'metadata'};
-      } else if (/Bundling/i.test(line)) {
-        renderState.progress = {...renderState.progress, phase: 'bundling'};
-      }
-      appendRenderLog(line);
-    });
-  };
-  child.stdout.on('data', push);
-  child.stderr.on('data', push);
-  let settled = false;
-  child.on('error', (error) => {
-    if (settled) return;
-    settled = true;
-    failRender(`启动渲染进程失败：${error.message}`);
-    if (propsFile) fs.rm(propsFile, {force: true}).catch(() => {});
-  });
-  child.on('close', (code, signal) => {
-    if (settled) return;
-    settled = true;
-    renderState.running = false;
-    renderState.exitCode = code;
-    renderState.endTime = Date.now();
-    renderState.progress = {...renderState.progress, percent: code === 0 ? 100 : renderState.progress?.percent ?? 0, phase: code === 0 ? 'done' : 'failed'};
-    if (code !== 0 && !renderState.error) renderState.error = signal ? `Render stopped by signal ${signal}` : `Render exited with code ${code}`;
-    if (propsFile) fs.rm(propsFile, {force: true}).catch(() => {});
-  });
-
-  res.json({success: true, status: renderState});
 });
 
 app.use('/public', express.static(PUBLIC_DIR));
@@ -1427,7 +1196,16 @@ app.use((req, res) => {
 });
 
 const PORT = process.env.EDITOR_PORT || 3456;
-app.listen(PORT, () => {
-  console.log(`Editor server: http://localhost:${PORT}`);
-  console.log('Studio server should be available at http://localhost:3000');
+const HOST = process.env.EDITOR_HOST || '127.0.0.1';
+const STUDIO_PORT = process.env.REMOTION_STUDIO_PORT || process.env.STUDIO_PORT || 3001;
+const server = app.listen(PORT, HOST, () => {
+  console.log(`Editor server: http://${HOST}:${PORT}`);
+  console.log(`Studio server should be available at http://localhost:${STUDIO_PORT}`);
 });
+
+server.on('error', (error) => {
+  console.error(`Editor server failed to listen on ${HOST}:${PORT}: ${error.message}`);
+  process.exit(1);
+});
+
+setInterval(() => {}, 60 * 60 * 1000);

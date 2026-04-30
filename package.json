@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "start": "node start.mjs",
-    "dev": "remotion studio",
+    "dev": "remotion studio --port 3001",
     "build": "remotion render AgentDiscussion output/video.mp4",
     "upgrade": "remotion upgrade",
     "editor:build": "cd editor && npx vite build",

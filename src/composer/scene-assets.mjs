@@ -187,6 +187,12 @@ export const assetIsMentioned = (asset, text = '') => {
 export const filterMentionedSceneAssets = (assets = [], mentionText = '') => normalizeSceneAssets(assets)
   .filter((asset) => assetIsMentioned(asset, mentionText));
 
+export const currentSceneAssetMentionText = (scene = {}) => {
+  const tuningNotes = String(scene.tuningNotes || '').trim();
+  if (tuningNotes) return tuningNotes;
+  return String(scene.designNotes || '').trim();
+};
+
 export const buildSceneAssetsMarkdown = (assets = [], options = {}) => {
   const normalized = (options.requireMention
     ? filterMentionedSceneAssets(assets, options.mentionText)
@@ -218,6 +224,7 @@ export const buildSceneAssetsMarkdown = (assets = [], options = {}) => {
     '- Image `both`: may be displayed as material and also used as a visual reference.',
     '- Video assets default to insertable material. Use Remotion `Video` from `@remotion/media`, usually inside a `Sequence` for timing and layout control.',
     '- Audio assets default to insertable material. Use Remotion `Audio` from `@remotion/media`, usually inside a `Sequence`; this is appropriate for click sounds, whooshes, music beds, or timed SFX.',
+    '- Select uploaded media by its listed `id` or `alias` first, then verify `assetType` / `role`. Never pick render media only with `assets.find(asset => asset.assetType === "...")` or only by role.',
     '',
     ...normalized.map((asset, index) => [
       `### ${asset.assetType[0].toUpperCase()}${asset.assetType.slice(1)} ${index + 1}: ${asset.name}`,
@@ -234,17 +241,20 @@ export const buildSceneAssetsMarkdown = (assets = [], options = {}) => {
         ? '- codegen instruction: use as effect/style reference only; do not place this image in the rendered frame.'
         : asset.assetType === 'image'
           ? [
-          '- codegen instruction: render this image as a visible Remotion `Img` layer selected from the runtime `assets` prop.',
-          `- render example shape: <Img src={staticFile(asset.file.replace(/^public[\\\\/]/, '').replace(/\\\\/g, '/'))} />`,
+          `- codegen instruction: render this image as a visible Remotion \`Img\` layer selected from the runtime \`assets\` prop by id \`${asset.id}\` or alias \`${asset.alias}\`.`,
+          `- selector example: assets.find((asset) => asset.id === '${asset.id}' && asset.assetType === 'image')`,
+          `- render example shape: <Img src={staticFile(selectedAsset.file.replace(/^public[\\\\/]/, '').replace(/\\\\/g, '/'))} />`,
         ].join('\n')
           : asset.assetType === 'video'
             ? [
-              '- codegen instruction: render this video as a visible Remotion `Video` layer selected from the runtime `assets` prop.',
-              `- render example shape: <Sequence from={startFrame} durationInFrames={duration}><Video src={staticFile(asset.file.replace(/^public[\\\\/]/, '').replace(/\\\\/g, '/'))} /></Sequence>`,
+              `- codegen instruction: render this video as a visible Remotion \`Video\` layer selected from the runtime \`assets\` prop by id \`${asset.id}\` or alias \`${asset.alias}\`.`,
+              `- selector example: assets.find((asset) => asset.id === '${asset.id}' && asset.assetType === 'video')`,
+              `- render example shape: <Sequence from={startFrame} durationInFrames={duration}><Video src={staticFile(selectedAsset.file.replace(/^public[\\\\/]/, '').replace(/\\\\/g, '/'))} /></Sequence>`,
             ].join('\n')
             : [
-              '- codegen instruction: render this audio as a timed Remotion `Audio` layer selected from the runtime `assets` prop.',
-              `- render example shape: <Sequence from={startFrame} durationInFrames={duration} layout="none"><Audio src={staticFile(asset.file.replace(/^public[\\\\/]/, '').replace(/\\\\/g, '/'))} /></Sequence>`,
+              `- codegen instruction: render this audio as a timed Remotion \`Audio\` layer selected from the runtime \`assets\` prop by id \`${asset.id}\` or alias \`${asset.alias}\`.`,
+              `- selector example: assets.find((asset) => asset.id === '${asset.id}' && asset.assetType === 'audio')`,
+              `- render example shape: <Sequence from={startFrame} durationInFrames={duration} layout="none"><Audio src={staticFile(selectedAsset.file.replace(/^public[\\\\/]/, '').replace(/\\\\/g, '/'))} /></Sequence>`,
             ].join('\n'),
     ].filter(Boolean).join('\n')),
   ].join('\n');

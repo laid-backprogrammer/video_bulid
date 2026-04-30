@@ -25,6 +25,9 @@ const clampInterpolate = (
 		easing,
 	});
 
+const safeEndFrame = (start: number, preferredEnd: number, durationInFrames: number) =>
+	Math.max(start + 1, Math.min(durationInFrames, preferredEnd));
+
 const wordFrame = (cues: SegmentCue[], match: string, fallback: number): number => {
 	const found = cues
 		.flatMap((cue) => cue.words)
@@ -811,7 +814,7 @@ const FinalQuestion: React.FC<{cues: SegmentCue[]; durationInFrames: number}> = 
 	const off = wordFrame(cues, '会跑偏', 1147);
 	const opacity = frame < 966 ? 0 : clampInterpolate(frame, [966, 982], [0, 1]);
 	const titleLock = clampInterpolate(frame, [1050, 1092], [0, 1]);
-	const quote = clampInterpolate(frame, [1124, Math.min(durationInFrames, 1161)], [0, 1]);
+	const quote = clampInterpolate(frame, [1124, safeEndFrame(1124, 1161, durationInFrames)], [0, 1]);
 
 	const targetOpacity = clampInterpolate(frame, [solve, solve + 16], [0, 1]);
 	const pathProgress = clampInterpolate(frame, [1092, off + 12], [0, 1], Easing.inOut(Easing.quad));

@@ -9,13 +9,14 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {synthesizeLipVoice} from './voice-synthesis.mjs';
-import {alignScenes, getAudioDurationFrames} from './voice-alignment.mjs';
+import {alignScenes} from './voice-alignment.mjs';
 import {readJsonFile} from './json-utils.mjs';
+import {currentSceneAssetMentionText, filterMentionedSceneAssets, normalizeSceneAssets} from './scene-assets.mjs';
+import {defaultSceneAudioFile, isSceneIncludedInVideo, SCRIPT_PATH} from '../server/paths.mjs';
+import {latestSceneAudio} from '../server/media-store.mjs';
 
-const SCRIPT_PATH = 'src/composer/script.json';
 const OUT_DIR = 'public';
 const SCENE_TAIL_PADDING_SECONDS = 0.2;
-const isSceneIncludedInVideo = (scene) => scene?.enabled !== false && String(scene?.text ?? '').trim().length > 0;
 
 // 全局进度状态（供外部查询）
 export const globalState = {
@@ -58,40 +59,6 @@ function log(text) {
   globalState.logs.push(line);
   notify();
   console.log(line);
-}
-
-const defaultSceneAudioFile = (sceneId) => path.join(OUT_DIR, 'voiceover', `${sceneId}.mp3`);
-
-const isSceneAudioFile = (sceneId, fileName) => (
-  fileName === `${sceneId}.mp3`
-  || fileName === `${sceneId}.wav`
-  || (
-    fileName.startsWith(`${sceneId}.`)
-    && (fileName.endsWith('.mp3') || fileName.endsWith('.wav'))
-    && !fileName.includes('.tmp.')
-    && !fileName.includes('.download.')
-  )
-);
-
-async function latestSceneAudio(sceneId) {
-  const dir = path.join(OUT_DIR, 'voiceover');
-  let entries;
-  try {
-    entries = await fs.readdir(dir, {withFileTypes: true});
-  } catch (e) {
-    if (e.code === 'ENOENT') return null;
-    throw e;
-  }
-
-  const files = [];
-  for (const entry of entries) {
-    if (!entry.isFile() || !isSceneAudioFile(sceneId, entry.name)) continue;
-    const filePath = path.join(dir, entry.name);
-    const stat = await fs.stat(filePath).catch(() => null);
-    if (stat) files.push({filePath, mtimeMs: stat.mtimeMs});
-  }
-  files.sort((a, b) => b.mtimeMs - a.mtimeMs);
-  return files[0]?.filePath ?? null;
 }
 
 export function subscribe(cb) {
@@ -137,11 +104,11 @@ export async function runPipeline(targetSceneId = null, options = {}) {
 
       // TTS
       try {
-        const latestAudioFile = forceTts ? null : await latestSceneAudio(scene.id);
-        const audioFile = latestAudioFile ?? defaultSceneAudioFile(scene.id);
+        const latestAudio = forceTts ? null : await latestSceneAudio(scene.id);
+        const audioFile = latestAudio?.filePath ?? defaultSceneAudioFile(scene.id);
 
-        if (latestAudioFile) {
-          log(`[${scene.id}] 音频已存在，跳过 TTS: ${latestAudioFile}`);
+        if (latestAudio) {
+          log(`[${scene.id}] 音频已存在，跳过 TTS: ${latestAudio.filePath}`);
           scene.audioFile = audioFile;
         } else {
           const options = {
@@ -214,6 +181,10 @@ export async function runPipeline(targetSceneId = null, options = {}) {
           captionsFile: s.captionsFile,
           durationInFrames: s.durationInFrames + Math.round((script.fps ?? 30) * SCENE_TAIL_PADDING_SECONDS),
           cues: s.cues ?? [],
+          assets: normalizeSceneAssets(filterMentionedSceneAssets(
+            s.assets,
+            currentSceneAssetMentionText(s),
+          )),
         }]),
     );
 
@@ -231,6 +202,10 @@ export async function runPipeline(targetSceneId = null, options = {}) {
         captionsFile: '',
         durationInFrames: Math.round((script.fps ?? 30) * 4),
         cues: [],
+        assets: normalizeSceneAssets(filterMentionedSceneAssets(
+          scene.assets,
+          currentSceneAssetMentionText(scene),
+        )),
       };
     });
 

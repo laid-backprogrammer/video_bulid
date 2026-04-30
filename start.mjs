@@ -12,6 +12,8 @@ import {fileURLToPath} from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isWin = process.platform === 'win32';
+const EDITOR_PORT = process.env.EDITOR_PORT || '3456';
+const STUDIO_PORT = process.env.REMOTION_STUDIO_PORT || process.env.STUDIO_PORT || '3001';
 
 function run(name, cmd, args, opts = {}) {
   const prefix = `[${name}]`;
@@ -29,7 +31,7 @@ function run(name, cmd, args, opts = {}) {
   } catch (error) {
     console.error(`${color}${prefix}${reset} 启动失败: ${error.message}`);
     console.error(`${color}${prefix}${reset} 命令: ${cmd} ${args.join(' ')}`);
-    console.error(`${color}${prefix}${reset} 提示: Windows 下若遇到权限错误，可尝试先执行 "npm run editor:build"，再单独运行 "node server.mjs" 和 "npx remotion studio"。`);
+    console.error(`${color}${prefix}${reset} 提示: Windows 下若遇到权限错误，可尝试先执行 "npm run editor:build"，再单独运行 "node server.mjs" 和 "npx remotion studio --port ${STUDIO_PORT}"。`);
     return null;
   }
 
@@ -72,7 +74,7 @@ let studioStarted = false;
 // 2. 等 Editor 启动后再启动 Studio
 setTimeout(() => {
   const remotionCli = path.join(__dirname, 'node_modules', '@remotion', 'cli', 'remotion-cli.js');
-  studio = run('Studio', process.execPath, [remotionCli, 'studio'], {shell: false});
+  studio = run('Studio', process.execPath, [remotionCli, 'studio', '--port', STUDIO_PORT], {shell: false});
   studioStarted = Boolean(studio);
 
   // 优雅关闭
@@ -104,8 +106,8 @@ setTimeout(() => {
   console.log('\n═══════════════════════════════════════════════');
   console.log('  ✅ 所有服务已启动');
   console.log('');
-  console.log('  📋 编辑器/控制台    http://localhost:3456');
-  console.log('  🎬 Remotion Studio  http://localhost:3000');
+  console.log(`  📋 编辑器/控制台    http://localhost:${EDITOR_PORT}`);
+  console.log(`  🎬 Remotion Studio  http://localhost:${STUDIO_PORT}`);
   console.log('');
   console.log('  提示: 按 Ctrl+C 同时关闭所有服务');
   console.log('═══════════════════════════════════════════════\n');

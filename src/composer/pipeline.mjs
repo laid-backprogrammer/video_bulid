@@ -13,6 +13,7 @@ import path from 'node:path';
 import {synthesizeScenes} from './voice-synthesis.mjs';
 import {alignScenes} from './voice-alignment.mjs';
 import {readJsonFile} from './json-utils.mjs';
+import {currentSceneAssetMentionText, filterMentionedSceneAssets, normalizeSceneAssets} from './scene-assets.mjs';
 
 const SCRIPT_PATH = 'src/composer/script.json';
 const MANIFEST_PATH = 'public/scenes-manifest.json';
@@ -35,6 +36,11 @@ async function main() {
       audioFile: s.audioFile,
       captionsFile: s.captionsFile,
       durationInFrames: s.durationInFrames,
+      cues: s.cues ?? [],
+      assets: normalizeSceneAssets(filterMentionedSceneAssets(
+        s.assets,
+        currentSceneAssetMentionText(s),
+      )),
     })),
   };
 

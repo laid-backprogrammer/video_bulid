@@ -18,18 +18,22 @@ Rules:
 
 - Do not edit `Root.tsx`, server files, editor files, package files, or other scene files.
 - Use `durationInFrames` and `cues[].words[]` to drive timing.
+- Every Remotion `interpolate()` input range must be strictly increasing at runtime. When frame points depend on `durationInFrames`, cue timing, or word timing, normalize or clamp those points before calling `interpolate()` so shorter preview durations cannot produce ranges like `[202, 213, 120]`.
 - Scene length and cue count are variable. Do not assume a fixed duration, fixed sentence count, or fixed visual beat count.
 - For multi-cue scenes, the main visual composition must process the full `cues` array with runtime logic such as `cues.map`, `cues.find`, `cues.findIndex`, or `cues.reduce`; using `CaptionOverlay` alone is not enough.
 - Do not hard-code narration text, cue titles, sentence arrays, or first-cue-only headline text. Display narration-derived text from `cues`, `cue.text`, or `cue.words` at runtime.
-- Treat `designNotes` and `tuningNotes` as the creative brief. Generate a bespoke scene from that brief instead of adapting a reusable title/caption template.
+- Treat `tuningNotes` as the highest-priority current user overrides. They supersede conflicting older `designNotes`.
+- Treat `designNotes` as the base creative brief, using only the parts that are not superseded by `tuningNotes`. Generate a bespoke scene from the effective brief instead of adapting a reusable title/caption template.
 - User media assets must be controlled by `@alias` / `@asset_id`. Only use uploaded assets that are explicitly mentioned in `designNotes` or `tuningNotes` and listed in `scene.assets`.
+- Every renderable mentioned asset must be selected by explicit `id` or alias first, for example `assets.find((asset) => asset.id === 'asset_...' && asset.assetType === 'image')`.
+- Do not select uploaded media only by broad type or role, for example `assets.find((asset) => asset.assetType === 'image')` or `assets.filter((asset) => asset.role !== 'reference')`; this can accidentally render unmentioned assets when runtime props contain more media.
 - Image assets have explicit roles:
   - `render`: visible Remotion image material. Render with `Img` from `remotion` and `staticFile(asset.file.replace(/^public[\\/]/, '').replace(/\\/g, '/'))`.
   - `reference`: visual reference only. Match style, layout, lighting, product/character look, or page effect; do not automatically place it into the frame.
   - `both`: may be rendered and used as a visual reference.
 - Video assets default to insertable material. Render with `Video` from `@remotion/media`, usually inside a `Sequence` for timing/placement.
 - Audio assets default to insertable material. Render with `Audio` from `@remotion/media`, usually inside a `Sequence` for timed SFX, click sounds, music, or cues.
-- Do not hard-code uploaded media ids, filenames, or `public/assets/scenes/...` paths. Always choose media from the runtime `assets` prop by alias/role/assetType and render no media, or a fallback, if the asset was deleted.
+- Do not hard-code uploaded media filenames or `public/assets/scenes/...` paths. Always choose media from the runtime `assets` prop by explicit mentioned id or alias first, then verify role/assetType, and render no media, or a fallback, if the asset was deleted.
 - The main visual layer should contain concrete visual metaphors, diagrams, UI objects, spatial layouts, charts, symbolic objects, or motion systems suggested by the brief. Pure headline cards are not enough.
 - Keep imports limited to React, `remotion`, `@remotion/media`, local hooks/components, and existing dependencies.
 - This file lives in `src/scenes/generated`, so local imports must use generated-file relative paths:

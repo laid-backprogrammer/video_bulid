@@ -1,16 +1,7 @@
 import type {CSSProperties} from 'react';
+import {MEDIA_ACCEPT, assetTypeLabel} from '../../app/assets';
 import {Panel} from '../../components/ui/Panel';
 import type {SceneAsset, SceneAssetDraft, SceneAssetRole} from '../../types';
-
-const mediaAccept = [
-  '.png,.jpg,.jpeg,.webp,.svg,image/png,image/jpeg,image/webp,image/svg+xml',
-  '.mp4,.webm,.mov,.m4v,video/mp4,video/webm,video/quicktime',
-  '.mp3,.wav,.m4a,.aac,.ogg,audio/mpeg,audio/wav,audio/mp4,audio/aac,audio/ogg',
-].join(',');
-
-const assetTypeLabel = (type?: string) => (
-  type === 'video' ? '视频' : type === 'audio' ? '音频' : '图片'
-);
 
 const assetUploadGridStyle: CSSProperties = {
   display: 'grid',
@@ -169,7 +160,7 @@ export function SceneAssetsPanel({
           key={fileInputKey}
           type="file"
           multiple
-          accept={mediaAccept}
+          accept={MEDIA_ACCEPT}
           onChange={(e) => onFilesChange(e.target.files)}
           disabled={controlsDisabled}
           style={fileInputStyle}

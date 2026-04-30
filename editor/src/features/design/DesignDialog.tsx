@@ -1,31 +1,11 @@
 import type {CSSProperties} from 'react';
+import {MEDIA_ACCEPT, assetMention, assetTypeLabel, draftMention} from '../../app/assets';
 import {LlmStreamPanel} from '../../components/LlmStreamPanel';
 import type {ModalType, SceneAsset, SceneAssetDraft, SceneAssetRole} from '../../types';
-
-const assetMention = (asset: Pick<SceneAsset, 'alias' | 'id'>) => `@${asset.alias ?? asset.id}`;
-
-const mediaAccept = [
-  '.png,.jpg,.jpeg,.webp,.svg,image/png,image/jpeg,image/webp,image/svg+xml',
-  '.mp4,.webm,.mov,.m4v,video/mp4,video/webm,video/quicktime',
-  '.mp3,.wav,.m4a,.aac,.ogg,audio/mpeg,audio/wav,audio/mp4,audio/aac,audio/ogg',
-].join(',');
-
-const assetTypeLabel = (type?: string) => (
-  type === 'video' ? '视频' : type === 'audio' ? '音频' : '图片'
-);
 
 const appendMention = (prompt: string, mention: string) => {
   const trimmed = prompt.trimEnd();
   return `${trimmed}${trimmed ? ' ' : ''}${mention} `;
-};
-
-const draftMention = (draft: Pick<SceneAssetDraft, 'alias' | 'file'>) => {
-  const fallback = draft.file.name
-    .normalize('NFKC')
-    .replace(/\.[a-z0-9]+$/i, '')
-    .replace(/[^\p{Letter}\p{Number}_-]+/gu, '-')
-    .replace(/^-+|-+$/g, '');
-  return `@${draft.alias.replace(/^@+/, '') || fallback || 'asset'}`;
 };
 
 export function DesignDialog({
@@ -76,7 +56,7 @@ export function DesignDialog({
               key={fileInputKey}
               type="file"
               multiple
-              accept={mediaAccept}
+              accept={MEDIA_ACCEPT}
               onChange={(event) => onAssetFilesChange(event.target.files)}
               disabled={controlsDisabled}
               style={fileInputStyle}

@@ -1,6 +1,6 @@
 import type {SceneItem, WorkflowStep} from '../types';
 
-export const STUDIO_URL = 'http://localhost:3000';
+export const STUDIO_URL = 'http://localhost:3001';
 
 export const STEP_ORDER: WorkflowStep[] = ['script', 'audio', 'design', 'preview', 'render'];
 
@@ -14,6 +14,7 @@ export const STEP_META: Record<WorkflowStep, {label: string; desc: string}> = {
 
 export const renderPhaseLabel: Record<string, string> = {
   starting: '准备中',
+  preflight: '预检关键帧',
   bundling: '打包中',
   metadata: '读取合成信息',
   rendering: '渲染帧',

@@ -23,6 +23,33 @@ const opacity = interpolate(frame, [0, 100], [0, 1], {
 });
 ```
 
+## Dynamic input ranges must be monotonic
+
+`interpolate()` throws at runtime unless every inputRange point is strictly larger than the previous point. This is easy to break when combining cue frames, word frames, hard-coded beats, and `durationInFrames`; for example a shorter preview duration can turn `[finalStart, lockStart, durationInFrames]` into `[202, 213, 120]`.
+
+When any point is dynamic, normalize the range before calling `interpolate()`:
+
+```ts
+const safeInputRange = (points: number[]) =>
+  points.reduce<number[]>((safe, point, index) => {
+    if (index === 0) return [point];
+    const previous = safe[index - 1];
+    safe.push(point > previous ? point : previous + 1);
+    return safe;
+  }, []);
+
+const safeInterpolate = (
+  frame: number,
+  input: number[],
+  output: number[],
+) => interpolate(frame, safeInputRange(input), output, {
+  extrapolateLeft: 'clamp',
+  extrapolateRight: 'clamp',
+});
+```
+
+Do not pass a dynamic input array directly to `interpolate()` unless you have already proven it is strictly increasing.
+
 ## Spring animations
 
 Spring animations have a more natural motion.  

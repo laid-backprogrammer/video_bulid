@@ -5,6 +5,7 @@ import path from 'node:path';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {readJsonFile} from './json-utils.mjs';
+import {buildManifest} from '../server/manifest-service.mjs';
 import {
   buildRepairContextMarkdown,
   buildSkillSelectionContext,
@@ -290,6 +291,38 @@ function looksLikeMojibake(text = '') {
   return /[\uFFFD\u934F\u95AB\u68F6\u748B\u6D60\u6D94]|(?:脙|脗|芒鈧瑋芒鈧劉|芒鈧搢芒鈧拷)/.test(String(text));
 }
 
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function codeMentionsAssetSelector(code, asset) {
+  const tokens = [asset?.id, asset?.alias].filter(Boolean);
+  if (!tokens.length) return false;
+  return tokens.some((token) => (
+    new RegExp(`['"\`]${escapeRegExp(token)}['"\`]`).test(code)
+    || new RegExp(`@${escapeRegExp(token)}(?=$|[^\\p{Letter}\\p{Number}_-])`, 'u').test(code)
+  ));
+}
+
+function genericAssetSelections(code) {
+  const selections = [];
+  const selectorPattern = /\bassets\s*\.\s*(?:find|filter|some)\s*\(\s*(?:\(?\s*(\w+)[^=]*?\)?\s*=>\s*)?([\s\S]{0,280}?)\)/g;
+  for (const match of code.matchAll(selectorPattern)) {
+    const snippet = match[0];
+    const usesTypeOrRole = /\bassetType\b|\brole\b/.test(snippet);
+    const usesSpecificSelector = /\balias\b|\bid\b/.test(snippet);
+    if (usesTypeOrRole && !usesSpecificSelector) selections.push(snippet.replace(/\s+/g, ' ').slice(0, 240));
+  }
+  return selections;
+}
+
+function hasUnsafeDynamicInterpolateWrapper(code) {
+  const dynamicWrapper = /\binterpolate\s*\(\s*(?:frame|currentFrame|f)\s*,\s*(?:input|inputRange|range|points)\s*,\s*(?:output|outputRange|values)\b/.test(code);
+  if (!dynamicWrapper) return false;
+  const hasMonotonicGuard = /\.reduce\s*<\s*number\[\]\s*>\s*\(|\.reduce\s*\(\s*\([^)]*(?:points|safe|acc)|Math\.max\s*\([^)]*(?:previous|prev|last)|strictly increasing|safeInputRange|safeInput/.test(code);
+  return !hasMonotonicGuard;
+}
+
 function validateGeneratedCode(code, context) {
   const sceneId = context.sceneId;
   const number = sceneNumber(sceneId);
@@ -349,6 +382,9 @@ function validateGeneratedCode(code, context) {
   if (/\bfetch\s*\(|XMLHttpRequest|localStorage|sessionStorage|document\.|window\./.test(code)) {
     problems.push('Generated Remotion scene must not use network or browser globals');
   }
+  if (hasUnsafeDynamicInterpolateWrapper(code)) {
+    problems.push('Dynamic interpolate() wrappers must normalize inputRange to strictly increasing values before calling Remotion interpolate(); otherwise shorter durations or cue timing can crash at runtime');
+  }
   const renderableAssets = (context.scene?.assets ?? [])
     .filter((asset) => asset.role === 'render' || asset.role === 'both');
   if (renderableAssets.length > 0) {
@@ -360,11 +396,13 @@ function validateGeneratedCode(code, context) {
     const usesRemotionImg = /\bImg\b/.test(code) && usesStaticFile;
     const usesRemotionVideo = /\bVideo\b/.test(code) && usesStaticFile;
     const usesRemotionAudio = /\bAudio\b/.test(code) && usesStaticFile;
-    const mentionsRenderableRole = /role\b[\s\S]{0,120}(?:render|both)|(?:render|both)[\s\S]{0,120}\brole\b/.test(code);
-    const mentionsAssetType = /assetType\b[\s\S]{0,120}(?:image|video|audio)|(?:image|video|audio)[\s\S]{0,120}\bassetType\b/.test(code);
-    const excludesReferenceOnly = /role\b[\s\S]{0,120}reference|reference[\s\S]{0,120}\brole\b/.test(code);
     if (!usesRuntimeAssets || !usesStaticFile) {
       problems.push('Scene has @mentioned user media assets; generated code must select them from the runtime assets prop and use staticFile()');
+    }
+    for (const asset of renderableAssets) {
+      if (!codeMentionsAssetSelector(code, asset)) {
+        problems.push(`Missing required @mentioned asset selector: @${asset.alias || asset.id}. Select this asset by explicit id or alias before checking type/role.`);
+      }
     }
     if (imageAssets.length > 0 && !usesRemotionImg) {
       problems.push('Scene has @mentioned image assets; generated code must render visible render/both images with Remotion <Img> and staticFile()');
@@ -375,17 +413,18 @@ function validateGeneratedCode(code, context) {
     if (audioAssets.length > 0 && !usesRemotionAudio) {
       problems.push('Scene has @mentioned audio assets; generated code must render timed audio/SFX with Remotion <Audio> from @remotion/media and staticFile()');
     }
-    if (!mentionsRenderableRole && !mentionsAssetType && !excludesReferenceOnly) {
-      problems.push('Generated code must select uploaded media by alias, role, or assetType so reference-only images are not rendered and the correct media is used');
+    const genericSelections = genericAssetSelections(code);
+    if (genericSelections.length > 0) {
+      problems.push(`Do not select uploaded media only by assetType or role; first narrow by required id or alias. Generic selector examples: ${genericSelections.slice(0, 2).join(' | ')}`);
     }
   }
   for (const asset of context.scene?.assets ?? []) {
     const publicPath = String(asset.file || '').replace(/\\/g, '/');
     const staticPath = asset.staticFilePath || toRemotionStaticFilePath(publicPath);
-    const hardcodedAssetTokens = [asset.id, publicPath, staticPath].filter(Boolean);
+    const hardcodedAssetTokens = [publicPath, staticPath].filter(Boolean);
     const hardcodedAssetToken = hardcodedAssetTokens.find((token) => code.includes(token));
     if (hardcodedAssetToken) {
-      problems.push(`Do not hard-code uploaded media ids or paths in generated scenes; select assets from the assets prop at runtime instead: ${hardcodedAssetToken}`);
+      problems.push(`Do not hard-code uploaded media filenames or paths in generated scenes; select assets from the assets prop at runtime instead: ${hardcodedAssetToken}`);
     }
     if ((asset.assetType ?? 'image') === 'image' && asset.role === 'reference') {
       if (publicPath && (code.includes(publicPath) || code.includes(staticPath))) {
@@ -436,6 +475,49 @@ async function runChecks({onLog} = {}) {
     if (!result.ok) {
       const output = outputs.join('\n\n').slice(-12000);
       throw new Error(`Validation failed:\n${output}`);
+    }
+  }
+
+  return outputs.join('\n\n');
+}
+
+async function runRenderSmoke(context, {onLog} = {}) {
+  if (process.env.SCENE_AGENT_RENDER_SMOKE === '0') {
+    logLine(onLog, '[scene-agent] Skipping Remotion render smoke (SCENE_AGENT_RENDER_SMOKE=0)');
+    return '';
+  }
+
+  const duration = Number(context.alignment?.durationInFrames || 0);
+  const frames = [...new Set([
+    0,
+    duration > 2 ? Math.max(0, Math.min(duration - 1, Math.floor(duration / 2))) : 0,
+  ])];
+  const smokeDir = path.join(CONTEXT_DIR, 'smoke');
+  await fs.mkdir(smokeDir, {recursive: true});
+  logLine(onLog, '[scene-agent] Rebuilding manifest before Remotion render smoke');
+  await buildManifest();
+  const propsPath = path.join(smokeDir, `${context.sceneId}.props.json`);
+  await fs.writeFile(propsPath, JSON.stringify({sceneId: context.sceneId}, null, 2), 'utf-8');
+
+  const outputs = [];
+  for (const frame of frames) {
+    const outPath = path.join(smokeDir, `${context.sceneId}.frame-${frame}.png`);
+    const relOut = path.relative(ROOT, outPath);
+    const relProps = path.relative(ROOT, propsPath);
+    const args = ['remotion', 'still', 'PreviewScene', relOut, '--props', relProps, '--frame', String(frame)];
+    logLine(onLog, `[scene-agent] Running npx ${args.join(' ')}`);
+    const result = await runCommand('npx', args, {
+      stream: true,
+      shell: process.platform === 'win32',
+    });
+    outputs.push([
+      `$ npx ${args.join(' ')}`,
+      result.stdout.trim(),
+      result.stderr.trim(),
+    ].filter(Boolean).join('\n'));
+    if (!result.ok) {
+      const output = outputs.join('\n\n').slice(-12000);
+      throw new Error(`Remotion render smoke failed:\n${output}`);
     }
   }
 
@@ -577,6 +659,7 @@ export async function runSceneAgent(options = {}) {
         }
 
         await runChecks({onLog: args.onLog});
+        await runRenderSmoke(json, {onLog: args.onLog});
         logLine(args.onLog, `[scene-agent] Done: ${path.relative(ROOT, targetPath)}`);
         return {
           sceneId: args.sceneId,

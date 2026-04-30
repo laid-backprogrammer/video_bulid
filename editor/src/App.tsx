@@ -2,6 +2,7 @@ import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {Player} from '@remotion/player';
 import {PreviewScene} from '../../src/Root';
 import {formatDuration, getErrorMessage, renderPhaseLabel, STEP_META, STUDIO_URL} from './app/workflow';
+import {createAssetAlias, createAssetDraft} from './app/assets';
 import {TuneCodegenDialog} from './components/TuneCodegenDialog';
 import {Panel} from './components/ui/Panel';
 import {Shell} from './components/ui/Shell';
@@ -11,6 +12,10 @@ import {SceneList} from './features/scenes/SceneList';
 import {SceneAssetsPanel} from './features/scenes/SceneAssetsPanel';
 import {WorkflowActions} from './features/workflow/WorkflowActions';
 import {WorkflowStepper} from './features/workflow/WorkflowStepper';
+import {useCodegenStatusPoll} from './hooks/useCodegenStatusPoll';
+import {usePipelineStream} from './hooks/usePipelineStream';
+import {useRenderStatusPoll} from './hooks/useRenderStatusPoll';
+import {useTtsStatusPoll} from './hooks/useTtsStatusPoll';
 import {fetchJson, postJson, postSse} from './services/api/client';
 import type {
   BusyAction,
@@ -21,7 +26,6 @@ import type {
   RenderStatus,
   SceneAsset,
   SceneAssetDraft,
-  SceneAssetType,
   SceneItem,
   ScriptScene,
   TtsStatus,
@@ -56,34 +60,6 @@ class ErrorBoundary extends React.Component<{children: React.ReactNode}, {hasErr
 
 /* ---------- components ---------- */
 
-const createAssetDraftId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-
-const createAssetAlias = (name: string) => {
-  const cleaned = name
-    .normalize('NFKC')
-    .replace(/\.[a-z0-9]+$/i, '')
-    .replace(/[^\p{Letter}\p{Number}_-]+/gu, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 48);
-  return cleaned || 'asset';
-};
-
-const detectAssetType = (file: File): SceneAssetType => {
-  const name = file.name.toLowerCase();
-  if (file.type.startsWith('video/') || /\.(mp4|webm|mov|m4v)$/i.test(name)) return 'video';
-  if (file.type.startsWith('audio/') || /\.(mp3|wav|m4a|aac|ogg)$/i.test(name)) return 'audio';
-  return 'image';
-};
-
-const createAssetDraft = (file: File): SceneAssetDraft => ({
-  id: createAssetDraftId(),
-  file,
-  assetType: detectAssetType(file),
-  alias: createAssetAlias(file.name),
-  role: 'render',
-  notes: '',
-});
-
 export default function App() {
   const [config, setConfig] = useState<Config | null>(null);
   const [scenes, setScenes] = useState<SceneItem[]>([]);
@@ -105,10 +81,6 @@ export default function App() {
   const [assetLoading, setAssetLoading] = useState(false);
   const [tuneDialogOpen, setTuneDialogOpen] = useState(false);
   const logsRef = useRef<HTMLDivElement>(null);
-  const renderPollErrorRef = useRef<string | null>(null);
-  const ttsPollErrorRef = useRef<string | null>(null);
-  const codegenPollErrorRef = useRef<string | null>(null);
-  const pipelineStreamErrorRef = useRef<string | null>(null);
 
   const selectedScene = useMemo(
     () => scenes.find((s) => s.id === selectedId) ?? scenes[0] ?? null,
@@ -129,83 +101,6 @@ export default function App() {
     setLogs((prev) => [...prev.slice(-300), `[${new Date().toLocaleTimeString()}] ${line}`]);
   }, []);
 
-  const noteRenderStatusError = useCallback((error: unknown) => {
-    const message = getErrorMessage(error);
-    const isNew = renderPollErrorRef.current !== message;
-    if (isNew) {
-      pushLog(`渲染状态刷新失败：${message}`);
-      renderPollErrorRef.current = message;
-    }
-    setRender((current) => {
-      const logLine = `[${new Date().toLocaleTimeString()}] 渲染状态刷新失败：${message}`;
-      return {
-        running: false,
-        exitCode: current?.exitCode ?? null,
-        startTime: current?.startTime ?? null,
-        endTime: current?.endTime ?? Date.now(),
-        outputFile: current?.outputFile ?? 'output/video.mp4',
-        mode: current?.mode ?? 'full',
-        sceneId: current?.sceneId ?? null,
-        progress: current?.progress
-          ? {...current.progress, phase: 'failed'}
-          : {rendered: 0, total: null, encoded: 0, percent: 0, phase: 'failed'},
-        logs: isNew ? [...(current?.logs ?? []), logLine].slice(-200) : (current?.logs ?? []),
-        error: message,
-        videoUrl: current?.videoUrl ?? null,
-        videoExists: current?.videoExists ?? false,
-      };
-    });
-  }, [pushLog]);
-
-  const noteTtsStatusError = useCallback((error: unknown) => {
-    const message = getErrorMessage(error);
-    const isNew = ttsPollErrorRef.current !== message;
-    if (isNew) {
-      pushLog(`语音状态刷新失败：${message}`);
-      ttsPollErrorRef.current = message;
-    }
-    setTtsStatus((current) => ({
-      running: false,
-      mode: current?.mode ?? null,
-      sceneId: current?.sceneId ?? null,
-      currentSceneId: current?.currentSceneId ?? null,
-      currentIndex: current?.currentIndex ?? 0,
-      total: current?.total ?? 0,
-      done: current?.done ?? 0,
-      step: 'failed',
-      message: '语音状态刷新失败',
-      taskId: current?.taskId ?? null,
-      providerStatus: current?.providerStatus ?? null,
-      outputFile: current?.outputFile ?? null,
-      startedAt: current?.startedAt ?? null,
-      endTime: Date.now(),
-      error: message,
-      logs: isNew ? [...(current?.logs ?? []), `[${new Date().toLocaleTimeString()}] 语音状态刷新失败：${message}`].slice(-120) : (current?.logs ?? []),
-    }));
-  }, [pushLog]);
-
-  const noteCodegenStatusError = useCallback((error: unknown) => {
-    const message = getErrorMessage(error);
-    const isNew = codegenPollErrorRef.current !== message;
-    if (isNew) {
-      pushLog(`Remotion 代码生成状态刷新失败：${message}`);
-      codegenPollErrorRef.current = message;
-    }
-    setCodegen((current) => ({
-      running: false,
-      sceneId: current?.sceneId ?? null,
-      provider: current?.provider ?? null,
-      step: 'failed',
-      message: 'Remotion 代码生成状态刷新失败',
-      startTime: current?.startTime ?? null,
-      endTime: Date.now(),
-      targetFile: current?.targetFile ?? null,
-      error: message,
-      result: current?.result ?? null,
-      logs: isNew ? [...(current?.logs ?? []), `[${new Date().toLocaleTimeString()}] Remotion 代码生成状态刷新失败：${message}`].slice(-160) : (current?.logs ?? []),
-    }));
-  }, [pushLog]);
-
   const appendModalLog = useCallback((kind: 'design', sceneId: string, line: string) => {
     setModal((current) => {
       if (!current || current.kind !== kind || current.sceneId !== sceneId) return current;
@@ -223,6 +118,8 @@ export default function App() {
     });
   }, []);
 
+  const {fetchRenderStatus} = useRenderStatusPoll({setRender, pushLog});
+
   const refresh = useCallback(async () => {
     const [cfg, sceneStatus] = await Promise.all([
       fetchJson<Config>('/api/config'),
@@ -230,119 +127,17 @@ export default function App() {
     ]);
     setConfig(cfg);
     setScenes(sceneStatus.scenes);
-    try {
-      const renderStatus = await fetchJson<RenderStatus>('/api/render/status');
-      setRender(renderStatus);
-      if (renderPollErrorRef.current) {
-        pushLog('渲染状态刷新已恢复');
-        renderPollErrorRef.current = null;
-      }
-    } catch (error) {
-      noteRenderStatusError(error);
-    }
+    await fetchRenderStatus();
     if (!selectedId && sceneStatus.scenes[0]) setSelectedId(sceneStatus.scenes[0].id);
-  }, [noteRenderStatusError, pushLog, selectedId]);
+  }, [fetchRenderStatus, selectedId]);
 
   useEffect(() => {
     refresh().catch((err) => pushLog(`加载失败：${err.message}`));
   }, [refresh, pushLog]);
 
-  useEffect(() => {
-    const es = new EventSource('/api/pipeline/stream');
-    es.addEventListener('status', (event) => {
-      try {
-        const data = JSON.parse((event as MessageEvent).data);
-        setPipeline(data.payload);
-        pipelineStreamErrorRef.current = null;
-      } catch (error) {
-        pushLog(`流水线状态解析失败：${getErrorMessage(error)}`);
-      }
-    });
-    es.addEventListener('log', (event) => {
-      try {
-        const data = JSON.parse((event as MessageEvent).data);
-        pushLog(data.payload.text);
-      } catch (error) {
-        pushLog(`流水线日志解析失败：${getErrorMessage(error)}`);
-      }
-    });
-    es.addEventListener('error', () => {
-      if (!pipelineStreamErrorRef.current) {
-        pipelineStreamErrorRef.current = 'disconnected';
-        pushLog('流水线状态连接中断，正在等待浏览器自动重连');
-      }
-      setPipeline((current) => (current?.running ? {...current, running: false} : current));
-    });
-    return () => es.close();
-  }, [pushLog]);
-
-  useEffect(() => {
-    const timer = setInterval(async () => {
-      try {
-        const status = await fetchJson<RenderStatus>('/api/render/status');
-        setRender(status);
-        if (renderPollErrorRef.current) {
-          pushLog('渲染状态刷新已恢复');
-          renderPollErrorRef.current = null;
-        }
-      } catch (error) {
-        noteRenderStatusError(error);
-      }
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [noteRenderStatusError, pushLog]);
-
-  useEffect(() => {
-    let wasRunning = false;
-    const poll = async () => {
-      try {
-        const status = await fetchJson<TtsStatus>('/api/tts/status');
-        setTtsStatus(status);
-        if (ttsPollErrorRef.current) {
-          pushLog('语音状态刷新已恢复');
-          ttsPollErrorRef.current = null;
-        }
-        if (status.running || wasRunning) {
-          await refresh();
-        }
-        wasRunning = status.running;
-      } catch (error) {
-        wasRunning = false;
-        noteTtsStatusError(error);
-      }
-    };
-    poll();
-    const timer = setInterval(poll, 1000);
-    return () => clearInterval(timer);
-  }, [noteTtsStatusError, pushLog, refresh]);
-
-  useEffect(() => {
-    let wasRunning = false;
-    const poll = async () => {
-      try {
-        const status = await fetchJson<CodegenStatus>('/api/scene/codegen/status');
-        setCodegen(status);
-        if (codegenPollErrorRef.current) {
-          pushLog('Remotion 代码生成状态刷新已恢复');
-          codegenPollErrorRef.current = null;
-        }
-        if (status.running || wasRunning) {
-          await refresh();
-          if (!status.running && wasRunning && !status.error) {
-            setCacheKey(Date.now());
-            pushLog(`${status.sceneId ?? '当前场景'} Remotion 代码生成完成`);
-          }
-        }
-        wasRunning = status.running;
-      } catch (error) {
-        wasRunning = false;
-        noteCodegenStatusError(error);
-      }
-    };
-    poll();
-    const timer = setInterval(poll, 1000);
-    return () => clearInterval(timer);
-  }, [noteCodegenStatusError, pushLog, refresh]);
+  usePipelineStream({setPipeline, pushLog});
+  useTtsStatusPoll({setTtsStatus, refresh, pushLog});
+  useCodegenStatusPoll({setCodegen, refresh, setCacheKey, pushLog});
 
   useEffect(() => {
     if (logsRef.current) logsRef.current.scrollTop = logsRef.current.scrollHeight;
