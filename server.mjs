@@ -4,7 +4,7 @@ import cors from 'cors';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {runPipeline, globalState, subscribe, snapshot} from './src/composer/runner.mjs';
-import {readJsonFile} from './src/composer/json-utils.mjs';
+import {parseJsonText, readJsonFile} from './src/composer/json-utils.mjs';
 import {synthesizeLipVoice} from './src/composer/voice-synthesis.mjs';
 import {alignScenes} from './src/composer/voice-alignment.mjs';
 import {runSceneAgent} from './src/composer/scene-agent.mjs';
@@ -454,6 +454,352 @@ app.post('/api/manifest/rebuild', async (req, res) => {
     res.json({success: true, manifest: await buildManifest()});
   } catch (e) {
     res.status(500).json({error: e.message});
+  }
+});
+
+const AGENT_ACTION_TYPES = new Set([
+  'save_config',
+  'run_tts_scene',
+  'run_asr_scene',
+  'generate_design_scene',
+  'generate_code_scene',
+  'render_preview_scene',
+  'rebuild_manifest',
+  'render_full_video',
+]);
+
+const safeSnippet = (text, max = 180) => String(text ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
+
+async function generatedSceneExists(sceneId) {
+  const match = String(sceneId ?? '').match(/^scene(\d+)$/i);
+  if (!match) return false;
+  return exists(resolveFromRoot('src', 'scenes', 'generated', `Scene${match[1]}.generated.tsx`));
+}
+
+function makeAgentAction(type, label, description, {sceneId = null, tone = 'neutral', disabledReason = null, payload = null} = {}) {
+  if (!AGENT_ACTION_TYPES.has(type)) throw new Error(`Unsupported agent action: ${type}`);
+  return {
+    id: `${sceneId ?? 'global'}-${type}`,
+    type,
+    label,
+    description,
+    sceneId: sceneId ?? undefined,
+    tone,
+    disabledReason: disabledReason ?? undefined,
+    payload: payload ?? undefined,
+  };
+}
+
+function buildAgentActions(context, mode = 'review') {
+  if (mode === 'advice') return [];
+  const selected = context.selectedScene ?? context.scenes.find((scene) => scene.enabled && scene.textChars > 0) ?? context.scenes[0];
+  const actions = [];
+  if (selected?.textChars > 0 && !selected.audioReady) {
+    actions.push(makeAgentAction('run_tts_scene', '生成本段语音', '调用现有 TTS，为当前场景生成配音。', {sceneId: selected.id, tone: 'primary'}));
+  }
+  if (selected?.audioReady && !selected.captionsReady) {
+    actions.push(makeAgentAction('run_asr_scene', '对齐字幕时间轴', '调用 ASR/时间轴对齐，生成 cues 和 words。', {sceneId: selected.id, tone: 'primary'}));
+  }
+  if (selected?.captionsReady && !selected.designReady) {
+    actions.push(makeAgentAction('generate_design_scene', '生成视觉方案', '让 LLM 根据文案、时间轴和素材生成可执行画面 brief。', {sceneId: selected.id, tone: 'primary'}));
+  }
+  if (selected?.captionsReady) {
+    actions.push(makeAgentAction('generate_code_scene', '生成 Remotion 代码', '根据设计方案、微调要求和字幕时间轴生成场景 TSX。', {sceneId: selected.id, tone: selected.designReady ? 'primary' : 'neutral'}));
+    actions.push(makeAgentAction('render_preview_scene', '渲染本段预览', '导出当前场景 MP4，用于检查画面和节奏。', {sceneId: selected.id, tone: 'primary'}));
+  }
+  actions.push(makeAgentAction('rebuild_manifest', '重建预览数据', '刷新 manifest，让最新音频、字幕和素材进入预览。', {tone: 'neutral'}));
+  if (mode === 'auto' && context.readyEnabledScenes > 0) {
+    actions.push(makeAgentAction('render_full_video', '渲染完整视频', '将当前已启用且就绪的场景导出为完整视频。', {
+      tone: 'warn',
+      disabledReason: context.render?.running ? '渲染任务正在运行' : null,
+    }));
+  }
+  return actions.filter((action) => !action.disabledReason).slice(0, mode === 'auto' ? 3 : 5);
+}
+
+async function buildAgentContext(sceneId) {
+  const [{fps, scenes}, renderStatus] = await Promise.all([
+    getScenesStatus(),
+    getRenderStatus(),
+  ]);
+
+  const generatedEntries = await Promise.all(scenes.map(async (scene) => [scene.id, await generatedSceneExists(scene.id)]));
+  const generatedById = new Map(generatedEntries);
+  const sceneSummaries = scenes.map((scene) => ({
+    id: scene.id,
+    enabled: scene.enabled !== false,
+    includedInVideo: Boolean(scene.includedInVideo),
+    textChars: String(scene.text ?? '').trim().length,
+    textPreview: safeSnippet(scene.text),
+    audioReady: Boolean(scene.audioExists),
+    captionsReady: Boolean(scene.captionExists),
+    cueCount: Array.isArray(scene.cues) ? scene.cues.length : 0,
+    durationMs: scene.durationMs ?? null,
+    designReady: Boolean(scene.designNotes?.trim()),
+    tuningReady: Boolean(scene.tuningNotes?.trim()),
+    assetCount: Array.isArray(scene.assets) ? scene.assets.length : 0,
+    assets: (scene.assets ?? []).slice(0, 24).map((asset) => ({
+      id: safeSnippet(asset.id, 80),
+      alias: safeSnippet(asset.alias, 80),
+      name: safeSnippet(asset.name, 120),
+      assetType: safeSnippet(asset.assetType, 24),
+      role: safeSnippet(asset.role, 24),
+      notes: safeSnippet(asset.notes, 180),
+    })),
+    generatedReady: Boolean(generatedById.get(scene.id)),
+    previewReady: Boolean(renderStatus.previewVideos?.[scene.id]),
+  }));
+  const selectedScene = sceneSummaries.find((scene) => scene.id === sceneId) ?? sceneSummaries.find((scene) => scene.enabled) ?? sceneSummaries[0] ?? null;
+  const readyEnabledScenes = sceneSummaries.filter((scene) => scene.enabled && scene.textChars > 0 && scene.audioReady && scene.captionsReady).length;
+
+  return {
+    fps,
+    selectedSceneId: selectedScene?.id ?? null,
+    selectedScene,
+    readyEnabledScenes,
+    enabledScenes: sceneSummaries.filter((scene) => scene.enabled && scene.textChars > 0).length,
+    scenes: sceneSummaries,
+    render: {
+      running: Boolean(renderStatus.running),
+      mode: renderStatus.mode,
+      sceneId: renderStatus.sceneId,
+      videoExists: Boolean(renderStatus.videoExists),
+      previewSceneIds: Object.keys(renderStatus.previewVideos ?? {}),
+      error: renderStatus.error ? safeSnippet(renderStatus.error, 240) : null,
+      progress: renderStatus.progress,
+    },
+    tts: {
+      running: Boolean(ttsState.running),
+      currentSceneId: ttsState.currentSceneId,
+      message: safeSnippet(ttsState.message, 120),
+      error: ttsState.error ? safeSnippet(ttsState.error, 180) : null,
+    },
+    codegen: {
+      running: Boolean(codegenState.running),
+      sceneId: codegenState.sceneId,
+      message: safeSnippet(codegenState.message, 120),
+      error: codegenState.error ? safeSnippet(codegenState.error, 180) : null,
+    },
+  };
+}
+
+function normalizeAgentMode(mode) {
+  return ['review', 'auto', 'advice'].includes(mode) ? mode : 'review';
+}
+
+function agentModeText(mode) {
+  if (mode === 'auto') return '自动模式：暂不作为当前主流程；如果收到该模式，只给自动路径建议，不主动越过安全确认。';
+  if (mode === 'advice') return '建议模式：我只分析方案和制作计划，不写入配置，也不调用 TTS、ASR、代码生成或渲染。';
+  return '分段协作模式：我只围绕当前 scene 结对讨论；素材按 scene 隔离，用户可用 @alias 指定；本段敲定后进入后台生成，用户继续推进下一段。';
+}
+
+function summarizeAttachments(attachments) {
+  if (!Array.isArray(attachments) || attachments.length === 0) return [];
+  return attachments.slice(0, 24).map((item) => ({
+    sceneId: safeSnippet(item?.sceneId, 40),
+    fileName: safeSnippet(item?.fileName || item?.name, 120),
+    alias: safeSnippet(item?.alias, 80),
+    mimeType: safeSnippet(item?.mimeType, 80),
+    kind: safeSnippet(item?.kind, 30),
+    inferredIntent: safeSnippet(item?.inferredIntent, 40),
+    notes: safeSnippet(item?.notes, 220),
+  }));
+}
+
+function summarizeAvailableAssets(assets) {
+  if (!Array.isArray(assets) || assets.length === 0) return [];
+  return assets.slice(0, 24).map((item) => ({
+    id: safeSnippet(item?.id, 80),
+    alias: safeSnippet(item?.alias, 80),
+    name: safeSnippet(item?.name, 120),
+    assetType: safeSnippet(item?.assetType, 24),
+    role: safeSnippet(item?.role, 24),
+    notes: safeSnippet(item?.notes, 180),
+  }));
+}
+
+function agentFallbackText(context, userMessage, actions, mode = 'review', attachments = [], availableAssets = []) {
+  const selected = context.selectedScene;
+  const actionLines = actions.length
+    ? actions.map((action, index) => `${index + 1}. ${action.label}${action.sceneId ? `（${action.sceneId}）` : ''}：${action.description}`).join('\n')
+    : mode === 'advice' ? '当前处于建议模式，我不会执行制作动作。' : '当前没有可安全执行的动作，先检查文案、语音、字幕和渲染状态。';
+  const attachmentLines = attachments.length
+    ? attachments.map((item, index) => `${index + 1}. @${item.alias || item.fileName}（${item.sceneId || selected?.id || 'scene'}）${item.fileName}：${item.inferredIntent || item.kind}${item.notes ? `，${item.notes}` : ''}`).join('\n')
+    : '本轮没有新增附件。';
+  const availableAssetLines = availableAssets.length
+    ? availableAssets.map((item, index) => `${index + 1}. @${item.alias || item.id}：${item.assetType || 'asset'} / ${item.role || 'render'}${item.notes ? `，${item.notes}` : ''}`).join('\n')
+    : '当前段没有已入库素材。';
+  return [
+    `我已检查当前项目，目标是“完成当前视频”。`,
+    agentModeText(mode),
+    '',
+    `当前重点场景：${selected?.id ?? '未选择'}。启用且就绪的场景为 ${context.readyEnabledScenes}/${context.enabledScenes || 0} 段。`,
+    selected ? `该场景状态：文案 ${selected.textChars ? '有' : '缺'}，语音 ${selected.audioReady ? '有' : '缺'}，字幕 ${selected.captionsReady ? '有' : '缺'}，设计 ${selected.designReady ? '有' : '缺'}，单段预览 ${selected.previewReady ? '已有' : '未导出'}。` : '',
+    '',
+    '本轮素材判断：',
+    attachmentLines,
+    '',
+    '当前段已入库素材：',
+    availableAssetLines,
+    '',
+    `你的请求：${safeSnippet(userMessage, 240) || '检查下一步'}`,
+    '',
+    mode === 'advice' ? '建议方案：' : '建议先执行：',
+    actionLines,
+    '',
+    mode === 'auto'
+      ? '如果你保持自动模式，我会按这条路径推进到预览稿，并在失败或不确定时暂停。'
+      : mode === 'review'
+        ? '分段协作下，先围绕当前段对齐意见；用户敲定后该段可后台生成，用户继续推进下一段。'
+        : '建议模式下不会自动执行任何制作任务。',
+  ].filter(Boolean).join('\n');
+}
+
+function compactAgentHistory(history) {
+  if (!Array.isArray(history)) return '';
+  return history.slice(-8).map((item) => {
+    const role = item?.role === 'user' ? 'user' : item?.role === 'agent' ? 'agent' : 'system';
+    return `${role}: ${safeSnippet(item?.content, 220)}`;
+  }).join('\n');
+}
+
+function extractJsonObject(text) {
+  const raw = String(text ?? '').trim();
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.trim();
+  const candidate = fenced || raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1);
+  if (!candidate || candidate === raw.slice(0, 0)) throw new Error('LLM 没有返回 JSON');
+  return parseJsonText(candidate);
+}
+
+function fallbackStoryboard(content, targetSceneCount = 4) {
+  const clean = String(content ?? '').replace(/\s+/g, ' ').trim();
+  const count = Math.max(1, Math.min(8, Number(targetSceneCount) || 4));
+  const segmentSize = Math.max(24, Math.ceil(clean.length / count));
+  const scenes = [];
+  for (let i = 0; i < count; i++) {
+    const text = clean.slice(i * segmentSize, (i + 1) * segmentSize).trim();
+    if (!text) continue;
+    scenes.push({
+      id: `scene${i + 1}`,
+      text,
+      durationHintSec: Math.max(4, Math.min(12, Math.round(text.length / 18))),
+      designNotes: '根据本段文案建立清晰主体画面，字幕避免遮挡核心视觉，节奏以语音时间轴为准。',
+    });
+  }
+  return {
+    title: safeSnippet(clean, 28) || '未命名视频',
+    summary: '基于用户输入自动拆分的短视频分镜草案，可编辑后应用到项目。',
+    scenes: scenes.length ? scenes : [{
+      id: 'scene1',
+      text: clean || '请补充视频文案。',
+      durationHintSec: 6,
+      designNotes: '等待用户补充内容后生成视觉方案。',
+    }],
+  };
+}
+
+function normalizeStoryboardDraft(draft, fallback) {
+  const source = draft && typeof draft === 'object' ? draft : fallback;
+  const scenes = Array.isArray(source.scenes) ? source.scenes : [];
+  return {
+    title: safeSnippet(source.title || fallback.title || '未命名视频', 80),
+    summary: safeSnippet(source.summary || fallback.summary || '', 500),
+    scenes: scenes.slice(0, 8).map((scene, index) => ({
+      id: /^scene\d+$/i.test(String(scene?.id ?? '')) ? String(scene.id).toLowerCase() : `scene${index + 1}`,
+      text: String(scene?.text ?? '').trim().slice(0, 5000),
+      designNotes: String(scene?.designNotes ?? '').trim().slice(0, 4000),
+      durationHintSec: Math.max(2, Math.min(30, Number(scene?.durationHintSec) || 6)),
+    })).filter((scene) => scene.text.trim()),
+  };
+}
+
+app.post('/api/agent/storyboard', async (req, res) => {
+  const {content = '', goal = '生成短视频预览稿', targetSceneCount = 4, attachments = [], mode = 'review'} = req.body || {};
+  console.log(`[api/agent/storyboard] mode=${mode} chars=${String(content).length}`);
+  try {
+    if (!String(content).trim()) throw new Error('content is required');
+    const fallback = fallbackStoryboard(content, targetSceneCount);
+    let draft = fallback;
+    try {
+      const text = await llmChat(
+        [
+          '你是短视频分镜脚本 Agent。',
+          '根据用户文章/方向生成可编辑分镜草案，只返回 JSON，不要 Markdown。',
+          'JSON shape: {"title": string, "summary": string, "scenes": [{"id":"scene1","text": string,"designNotes": string,"durationHintSec": number}]}',
+          '每段 text 是可直接 TTS 的旁白文案，不要写镜头说明进 text。',
+          'designNotes 写画面设计、素材使用和节奏要求。',
+          '最多 8 段，适合 30-90 秒短视频。',
+        ].join('\n'),
+        [
+          `目标：${safeSnippet(goal, 200)}`,
+          `建议场景数：${Math.max(1, Math.min(8, Number(targetSceneCount) || 4))}`,
+          `执行模式：${normalizeAgentMode(mode)}`,
+          `素材意图：\n${JSON.stringify(summarizeAttachments(attachments), null, 2)}`,
+          `用户内容：\n${String(content).slice(0, 12000)}`,
+        ].join('\n\n'),
+      );
+      draft = normalizeStoryboardDraft(extractJsonObject(text), fallback);
+    } catch (error) {
+      draft = normalizeStoryboardDraft(fallback, fallback);
+    }
+    res.json({success: true, draft});
+  } catch (e) {
+    res.status(400).json({error: e.message || String(e)});
+  }
+});
+
+app.post('/api/agent/plan/stream', async (req, res) => {
+  const {goal = '完成当前视频', sceneId = '', userMessage = '', history = [], mode: rawMode = 'review', attachments: rawAttachments = [], availableAssets: rawAvailableAssets = []} = req.body || {};
+  const mode = normalizeAgentMode(rawMode);
+  const attachments = summarizeAttachments(rawAttachments);
+  const availableAssets = summarizeAvailableAssets(rawAvailableAssets);
+  console.log(`[api/agent/plan/stream] scene=${sceneId || '-'} goal=${safeSnippet(goal, 60)}`);
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders?.();
+
+  try {
+    const context = await buildAgentContext(sceneId);
+    const actions = buildAgentActions(context, mode);
+    sendSse(res, 'status', {message: '已整理脱敏项目状态，准备生成 Agent 计划', provider: 'server'});
+    sendSse(res, 'actions', {actions, mode, attachments, availableAssets});
+
+    const fallback = agentFallbackText(context, userMessage, actions, mode, attachments, availableAssets);
+    await streamLlmChat(res, {
+      fallback,
+      system: [
+        '你是一个本地视频制作工作台里的 LLM Agent，负责帮助用户完成当前 Remotion 视频。',
+        '界面是极简对话器，不是控制台；你的回复要像制作搭档，简洁说明你理解了什么、下一步会怎么做。',
+        '当前第一阶段主流程是 review=分段协作；auto 自动到完整预览稿暂不作为主流程；advice=只建议不执行。',
+        'advice 模式下不得暗示会写入配置、调用 TTS、ASR、代码生成或渲染。',
+        'review 模式下，只围绕当前 scene 讨论；每个 scene 的素材互相隔离，不能把其他 scene 的素材混入当前方案。',
+        '用户用 @alias 或 @asset_id 精确指定素材；未 @ 的素材只可讨论用途，不要假设会进入 Remotion 生成上下文。',
+        '本段敲定后由前端触发后台 TTS、ASR、视觉方案、Remotion 代码生成和单段渲染；用户可以继续推进下一段。',
+        '不要输出代码，不要要求用户去命令行操作。',
+        '素材意图需要明确：图片可能是画面素材或风格参考；视频可能是插入片段、背景片段或参考；BGM 是全片背景音乐；音效是事件触发或氛围音。',
+        '如果素材用途不明确，只追问不确定的素材。',
+      ].join('\n'),
+      user: [
+        `目标：${safeSnippet(goal, 120) || '完成当前视频'}`,
+        `执行模式：${mode}；${agentModeText(mode)}`,
+        `用户本轮请求：${safeSnippet(userMessage, 500) || '检查当前状态并给下一步计划'}`,
+        '',
+        `本轮附件/素材意图：\n${JSON.stringify(attachments, null, 2)}`,
+        '',
+        `当前段已入库素材：\n${JSON.stringify(availableAssets, null, 2)}`,
+        '',
+        `最近对话：\n${compactAgentHistory(history) || '(empty)'}`,
+        '',
+        `脱敏项目状态 JSON：\n${JSON.stringify(context, null, 2)}`,
+        '',
+        `可渲染动作白名单 JSON：\n${JSON.stringify(actions, null, 2)}`,
+      ].join('\n'),
+    });
+  } catch (e) {
+    sendSse(res, 'error', {error: e.message || String(e)});
+  } finally {
+    res.end();
   }
 });
 
