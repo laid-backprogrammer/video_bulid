@@ -3,6 +3,7 @@ import express from 'express';
 import cors from 'cors';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import {execFile} from 'node:child_process';
 import {runPipeline, globalState, subscribe, snapshot} from './src/composer/runner.mjs';
 import {parseJsonText, readJsonFile} from './src/composer/json-utils.mjs';
 import {synthesizeLipVoice} from './src/composer/voice-synthesis.mjs';
@@ -38,6 +39,7 @@ import {findScene, mergeConfigSceneAssets, readScript, writeScript} from './src/
 import {buildManifest} from './src/server/manifest-service.mjs';
 import {parseMultipartBody} from './src/server/multipart-utils.mjs';
 import {getRenderStatus, startRender} from './src/server/render-service.mjs';
+import {getVideoAgentStatus, startVideoAgentRun, subscribeVideoAgent} from './src/server/video-agent-service.mjs';
 
 const app = express();
 app.use(cors());
@@ -74,9 +76,52 @@ const codegenState = {
   error: null,
   result: null,
   logs: [],
+  commandCount: 0,
+  fileChanges: [],
+};
+
+const codegenCommandPattern = /\bRunning\b|\$ |npx |npm |remotion|tsc|editor:build/i;
+
+const generatedSceneFile = (sceneId) => {
+  const match = String(sceneId ?? '').match(/^scene(\d+)$/i);
+  return match ? `src/scenes/generated/Scene${match[1]}.generated.tsx` : null;
+};
+
+const gitFileChanges = (files = []) => new Promise((resolve) => {
+  const normalized = [...new Set(files.filter(Boolean).map((file) => String(file).replace(/\\/g, '/')))];
+  if (!normalized.length) {
+    resolve([]);
+    return;
+  }
+  execFile('git', ['diff', '--numstat', '--', ...normalized], {cwd: resolveFromRoot()}, (error, stdout) => {
+    if (error) {
+      resolve(normalized.map((file) => ({file, additions: 0, deletions: 0})));
+      return;
+    }
+    const byFile = new Map(normalized.map((file) => [file, {file, additions: 0, deletions: 0}]));
+    for (const line of stdout.split(/\r?\n/).filter(Boolean)) {
+      const [added, removed, ...rest] = line.split(/\t/);
+      const file = rest.join('\t').replace(/\\/g, '/');
+      if (!file) continue;
+      byFile.set(file, {
+        file,
+        additions: Number.isFinite(Number(added)) ? Number(added) : 0,
+        deletions: Number.isFinite(Number(removed)) ? Number(removed) : 0,
+      });
+    }
+    resolve([...byFile.values()]);
+  });
+});
+
+const refreshCodegenChanges = async () => {
+  const files = [codegenState.targetFile, codegenState.result?.targetFile].filter(Boolean);
+  codegenState.fileChanges = await gitFileChanges(files);
 };
 
 const appendCodegenLog = (message) => {
+  if (codegenCommandPattern.test(String(message ?? ''))) {
+    codegenState.commandCount += 1;
+  }
   codegenState.logs = [
     ...codegenState.logs.slice(-399),
     `[${new Date().toLocaleTimeString()}] ${message}`,
@@ -87,6 +132,7 @@ const codegenSnapshot = () => ({
   ...codegenState,
   logs: [...codegenState.logs],
   result: codegenState.result ? {...codegenState.result} : null,
+  fileChanges: [...(codegenState.fileChanges ?? [])],
 });
 
 const appendTtsLog = (message) => {
@@ -459,6 +505,7 @@ app.post('/api/manifest/rebuild', async (req, res) => {
 
 const AGENT_ACTION_TYPES = new Set([
   'save_config',
+  'rewrite_scene_pipeline',
   'run_tts_scene',
   'run_asr_scene',
   'generate_design_scene',
@@ -490,10 +537,200 @@ function makeAgentAction(type, label, description, {sceneId = null, tone = 'neut
   };
 }
 
-function buildAgentActions(context, mode = 'review') {
+function extractSceneScriptText(userMessage = '', history = []) {
+  const findInText = (value = '') => {
+    const text = String(value ?? '');
+    const patterns = [
+      /(?:口播文案|新文案|文案|脚本|台词|修正为|改为|改成|更新为|定为)[\s\S]{0,100}?[「“"]([^」”"\r\n]{3,240})[」”"]/i,
+      /(?:口播文案|新文案|文案|脚本|台词|修正为|改为|改成|更新为|定为)[\s\S]{0,100}?>\s*[「“"]?([^」”"\r\n]{3,240})[」”"]?/i,
+      /(?:口播文案|新文案|文案|脚本|台词)\s*(?:是|为|定为|改成|改为|：|:)\s*([^\r\n]{3,240})/i,
+    ];
+    for (const pattern of patterns) {
+      const match = text.match(pattern);
+      const candidate = match?.[1]?.replace(/^>\s*/, '').trim();
+      if (candidate) return candidate.replace(/[。；;，,]*$/, '').trim();
+    }
+    return '';
+  };
+  const explicit = findInText(userMessage);
+  if (explicit) return explicit;
+
+  const direct = String(userMessage ?? '').match(/(?:口播文案|文案|脚本|台词)\s*(?:是|为|定为|改成|改为|：|:)\s*["“「]?([^"”」\n]{4,240})/);
+  if (direct?.[1]) return direct[1].trim();
+
+  const recent = Array.isArray(history) ? [...history].reverse() : [];
+  for (const item of recent) {
+    const content = String(item?.content ?? '');
+    const fromContent = findInText(content);
+    if (fromContent) return fromContent;
+    const match = content.match(/(?:口播文案|新文案|文案)\s*(?:是|为|定为|：|:)?\s*[>：:\s]*["“「]([^"”」\n]{4,240})["”」]/);
+    if (match?.[1]) return match[1].trim();
+  }
+  return '';
+}
+
+function hasMentionedAssetChange(userMessage = '', history = []) {
+  const text = [
+    String(userMessage ?? ''),
+    ...(Array.isArray(history) ? history.slice(-4).map((item) => String(item?.content ?? '')) : []),
+  ].join('\n');
+  return /@[^\s，。；;、)）]+/.test(text)
+    && /(?:用|使用|入场|并排|左右|图标|素材|图片|视频|展示|放到|安排|排版|layout|icon|image)/i.test(text);
+}
+
+function needsRewritePipeline(userMessage = '', history = [], currentText = '') {
+  const requestedScript = extractSceneScriptText(userMessage, history);
+  if (requestedScript && requestedScript !== String(currentText ?? '').trim()) return true;
+  return hasMentionedAssetChange(userMessage, history) || shouldCommitScene(userMessage);
+}
+
+function shouldCommitScene(userMessage = '') {
+  const text = String(userMessage ?? '').trim();
+  if (/[吗?？]|开始执行了没|执行了吗/.test(text)) return false;
+  if (/(?:清理|删除|丢掉|清空).{0,12}(?:预览|preview|旧内容|之前|原来)/i.test(text)) return true;
+  if (/(?:全部|全流程|从头|完整).{0,12}(?:重做|重制|重来|重跑|重新生成|重新预览)/i.test(text)) return true;
+  if (/(?:重做|重制|重来|重跑|重新生成|重新渲染|重新预览).{0,12}(?:全部|全流程|预览|本段|当前段)/i.test(text)) return true;
+  return /^(可以|确认|开始|开始执行|执行|就这样|按这个|没问题|ok|OK)$/i.test(text)
+    || /(?:开始执行|确认执行|重新走|重制|重做|按这个.*生成|按这个.*预览)/.test(text);
+}
+
+function agentActionPayloadSchema(type) {
+  if (type === 'rewrite_scene_pipeline') {
+    return {
+      type: 'object',
+      properties: {
+        scriptText: {type: 'string', description: 'Full narration text to write. Omit to reuse the current scene text.'},
+        prompt: {type: 'string', description: 'User intent for the visual brief/codegen. Include @asset aliases exactly when the user wants uploaded media used.'},
+        force: {type: 'boolean', description: 'Force TTS/ASR/codegen/preview regeneration.'},
+        clearPreview: {type: 'boolean', description: 'Clear the existing scene preview before regenerating.'},
+      },
+    };
+  }
+  return {type: 'object', properties: {}};
+}
+
+function buildAgentToolSchema(actions) {
+  return {
+    responseSchema: {
+      type: 'object',
+      required: ['message', 'actions'],
+      properties: {
+        message: {type: 'string', description: 'Short Chinese reply to the user.'},
+        actions: {
+          type: 'array',
+          description: 'Server-side tools to execute. Choose only from availableTools.',
+          items: {
+            type: 'object',
+            required: ['type'],
+            properties: {
+              type: {type: 'string', enum: [...AGENT_ACTION_TYPES]},
+              sceneId: {type: 'string', description: 'scene id such as scene1 when the tool is scene-scoped.'},
+              payload: {type: 'object'},
+            },
+          },
+        },
+      },
+    },
+    availableTools: actions.map((action) => ({
+      type: action.type,
+      sceneId: action.sceneId ?? null,
+      label: action.label,
+      description: action.description,
+      payloadSchema: agentActionPayloadSchema(action.type),
+    })),
+  };
+}
+
+function normalizePlannedAgentActions(rawActions, fallbackActions, context, request = {}) {
+  const source = Array.isArray(rawActions) ? rawActions : [];
+  const selected = context.selectedScene;
+  const normalized = [];
+  const currentText = selected?.text || selected?.textPreview || '';
+  const userMessage = request.userMessage || '';
+  const requestedScript = extractSceneScriptText(userMessage, request.history);
+  const wantsClearPreview = /(?:清理|清空|删除|丢掉).{0,12}(?:预览|preview|旧内容|之前|原来)/i.test(userMessage);
+  const shouldRewrite = selected && needsRewritePipeline(userMessage, request.history, currentText);
+
+  for (const raw of source) {
+    const type = String(raw?.type || raw?.tool || raw?.action || '');
+    if (!AGENT_ACTION_TYPES.has(type)) continue;
+    const rawSceneId = raw?.sceneId ? String(raw.sceneId) : selected?.id;
+    const base = fallbackActions.find((action) => (
+      action.type === type && (!action.sceneId || !rawSceneId || action.sceneId === rawSceneId)
+    )) ?? fallbackActions.find((action) => action.type === type);
+    if (!base) continue;
+
+    const payload = {
+      ...(base.payload && typeof base.payload === 'object' ? base.payload : {}),
+      ...(raw.payload && typeof raw.payload === 'object' ? raw.payload : {}),
+    };
+    if (type === 'rewrite_scene_pipeline') {
+      payload.scriptText = String(payload.scriptText || requestedScript || currentText).trim();
+      payload.prompt = safeSnippet(payload.prompt || userMessage, 500);
+      payload.force = true;
+      if (wantsClearPreview) payload.clearPreview = true;
+      if (!payload.scriptText) continue;
+    }
+    normalized.push({...base, payload});
+  }
+
+  if (shouldRewrite && !normalized.some((action) => action.type === 'rewrite_scene_pipeline')) {
+    const base = fallbackActions.find((action) => action.type === 'rewrite_scene_pipeline');
+    if (base) {
+      normalized.unshift({
+        ...base,
+        payload: {
+          ...(base.payload && typeof base.payload === 'object' ? base.payload : {}),
+          scriptText: String(requestedScript || currentText).trim(),
+          prompt: safeSnippet(userMessage, 500),
+          force: true,
+          clearPreview: wantsClearPreview || undefined,
+        },
+      });
+    }
+  }
+
+  return normalized.length > 0 ? normalized : fallbackActions;
+}
+
+function parseAgentPlanOutput(rawText, fallbackText, fallbackActions, context, request = {}) {
+  try {
+    const parsed = extractJsonObject(rawText);
+    const message = String(parsed?.message || parsed?.reply || fallbackText).trim() || fallbackText;
+    const actions = normalizePlannedAgentActions(parsed?.actions, fallbackActions, context, request);
+    return {message, actions, source: 'llm-schema'};
+  } catch {
+    return {
+      message: String(rawText || fallbackText).trim() || fallbackText,
+      actions: fallbackActions,
+      source: 'fallback-schema',
+    };
+  }
+}
+
+function buildAgentActions(context, mode = 'review', request = {}) {
   if (mode === 'advice') return [];
   const selected = context.selectedScene ?? context.scenes.find((scene) => scene.enabled && scene.textChars > 0) ?? context.scenes[0];
   const actions = [];
+  const scriptText = extractSceneScriptText(request.userMessage, request.history);
+  const shouldRewrite = selected && needsRewritePipeline(request.userMessage, request.history, selected.text || selected.textPreview || '');
+  if (shouldRewrite) {
+    actions.push(makeAgentAction(
+      'rewrite_scene_pipeline',
+      scriptText ? '写入文案并重制本段' : '按当前文案重制本段',
+      '结构化执行：写入当前 scene 文案/素材意图，然后依次运行 TTS、ASR、视觉方案、Remotion 代码生成和单段预览渲染。',
+      {
+        sceneId: selected.id,
+        tone: 'primary',
+        payload: {
+          scriptText: scriptText || selected.text || selected.textPreview || '',
+          prompt: safeSnippet(request.userMessage, 500),
+          force: true,
+          clearPreview: /(?:清理|清空|删除|丢掉).{0,12}(?:预览|preview|旧内容|之前|原来)/i.test(request.userMessage || ''),
+        },
+      },
+    ));
+  }
   if (selected?.textChars > 0 && !selected.audioReady) {
     actions.push(makeAgentAction('run_tts_scene', '生成本段语音', '调用现有 TTS，为当前场景生成配音。', {sceneId: selected.id, tone: 'primary'}));
   }
@@ -529,6 +766,7 @@ async function buildAgentContext(sceneId) {
     id: scene.id,
     enabled: scene.enabled !== false,
     includedInVideo: Boolean(scene.includedInVideo),
+    text: String(scene.text ?? ''),
     textChars: String(scene.text ?? '').trim().length,
     textPreview: safeSnippet(scene.text),
     audioReady: Boolean(scene.audioExists),
@@ -737,6 +975,8 @@ app.post('/api/agent/storyboard', async (req, res) => {
           `素材意图：\n${JSON.stringify(summarizeAttachments(attachments), null, 2)}`,
           `用户内容：\n${String(content).slice(0, 12000)}`,
         ].join('\n\n'),
+        null,
+        {responseFormatJson: true},
       );
       draft = normalizeStoryboardDraft(extractJsonObject(text), fallback);
     } catch (error) {
@@ -758,15 +998,24 @@ app.post('/api/agent/plan/stream', async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders?.();
+  const abortSignal = createResponseAbortSignal(res);
 
   try {
     const context = await buildAgentContext(sceneId);
-    const actions = buildAgentActions(context, mode);
+    const actions = buildAgentActions(context, mode, {userMessage, history});
     sendSse(res, 'status', {message: '已整理脱敏项目状态，准备生成 Agent 计划', provider: 'server'});
-    sendSse(res, 'actions', {actions, mode, attachments, availableAssets});
+    const toolSchema = buildAgentToolSchema(actions);
+    sendSse(res, 'available_actions', {actions, mode, attachments, availableAssets, toolSchema});
 
     const fallback = agentFallbackText(context, userMessage, actions, mode, attachments, availableAssets);
-    await streamLlmChat(res, {
+    let plannedActions = actions;
+    const transformAgentPlan = (rawText) => {
+      const plan = parseAgentPlanOutput(rawText, fallback, actions, context, {userMessage, history});
+      plannedActions = plan.actions;
+      return plan.message;
+    };
+    try {
+      await streamLlmChat(res, {
       fallback,
       system: [
         '你是一个本地视频制作工作台里的 LLM Agent，负责帮助用户完成当前 Remotion 视频。',
@@ -785,6 +1034,13 @@ app.post('/api/agent/plan/stream', async (req, res) => {
         `执行模式：${mode}；${agentModeText(mode)}`,
         `用户本轮请求：${safeSnippet(userMessage, 500) || '检查当前状态并给下一步计划'}`,
         '',
+        'IMPORTANT: Output only JSON matching Tool/action schema. Choose actions only from availableTools.',
+        'If the user changes narration text, says the text/script is fixed, or asks to use @mentioned assets in the scene, choose rewrite_scene_pipeline with full scriptText and prompt. Do not claim the script was changed unless rewrite_scene_pipeline is selected.',
+        'Use generate_code_scene only when script/audio/timing/design notes are already correct and no new @asset instruction needs to be persisted.',
+        'For clear previous preview / redo everything / regenerate current scene, choose rewrite_scene_pipeline.',
+        '',
+        `Tool/action schema:\n${JSON.stringify(toolSchema, null, 2)}`,
+        '',
         `本轮附件/素材意图：\n${JSON.stringify(attachments, null, 2)}`,
         '',
         `当前段已入库素材：\n${JSON.stringify(availableAssets, null, 2)}`,
@@ -795,8 +1051,24 @@ app.post('/api/agent/plan/stream', async (req, res) => {
         '',
         `可渲染动作白名单 JSON：\n${JSON.stringify(actions, null, 2)}`,
       ].join('\n'),
-    });
+        transformText: transformAgentPlan,
+        beforeDone: () => {
+          sendSse(res, 'actions', {actions: plannedActions, mode, attachments, availableAssets, source: 'llm-schema'});
+        },
+        responseFormatJson: true,
+        signal: abortSignal,
+      });
+    } catch (error) {
+      if (abortSignal.aborted || isAbortError(error)) return;
+      const message = error.message || String(error);
+      sendSse(res, 'status', {message: `LLM plan stream failed, using validated local tool plan: ${safeSnippet(message, 180)}`, provider: 'fallback'});
+      plannedActions = normalizePlannedAgentActions(actions, actions, context, {userMessage, history});
+      sendSse(res, 'actions', {actions: plannedActions, mode, attachments, availableAssets, source: 'fallback-schema'});
+      sendSse(res, 'token', {delta: fallback, text: fallback, provider: 'fallback'});
+      sendSse(res, 'done', {text: fallback, thinking: '', provider: 'fallback'});
+    }
   } catch (e) {
+    if (abortSignal.aborted || isAbortError(e)) return;
     sendSse(res, 'error', {error: e.message || String(e)});
   } finally {
     res.end();
@@ -812,40 +1084,79 @@ async function getLlmApiKey() {
   }
 }
 
-async function llmChat(system, user, model) {
+async function llmChat(system, user, model, options = {}) {
   const settings = await getLlmSettings();
   if (!settings.apiKey) throw new Error('未配置 LLM API Key（script.llmApiKey、script.transcribeApiKey 或环境变量 OPENAI_API_KEY）');
 
+  const selectedModel = model || settings.model;
+  const requestBody = buildChatRequestBody(selectedModel, [
+    {role: 'system', content: system},
+    {role: 'user', content: user},
+  ], {temperature: 0.7, responseFormatJson: Boolean(options.responseFormatJson)});
   const response = await fetch(`${settings.baseUrl}/v1/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${settings.apiKey}`,
-    },
-    body: JSON.stringify({
-      model: model || settings.model,
-      messages: [
-        {role: 'system', content: system},
-        {role: 'user', content: user},
-      ],
-      temperature: 0.7,
-    }),
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${settings.apiKey}`,
+      },
+      body: JSON.stringify(requestBody),
   });
+  if (!response.ok) {
+    const text = await response.text();
+    let data = null;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {}
+    throw new Error(data?.error?.message || text || response.statusText);
+  }
+  if (requestBody.stream) {
+    return (await readChatStreamText(response, {responseFormatJson: Boolean(options.responseFormatJson)})).text;
+  }
   const data = await response.json();
-  if (!response.ok) throw new Error(data.error?.message || JSON.stringify(data));
-  return data.choices?.[0]?.message?.content || '';
+  return normalizeLlmContentText(data.choices?.[0]?.message?.content || '', {
+    responseFormatJson: Boolean(options.responseFormatJson),
+  });
 }
 
 function sendSse(res, event, payload) {
+  if (res.writableEnded || res.destroyed) return;
   res.write(`event: ${event}\n`);
   res.write(`data: ${JSON.stringify(payload)}\n\n`);
 }
 
+function createResponseAbortSignal(res) {
+  const controller = new AbortController();
+  res.on('close', () => {
+    if (!res.writableEnded) controller.abort();
+  });
+  return controller.signal;
+}
+
+function isAbortError(error) {
+  return error?.name === 'AbortError' || /aborted|abort/i.test(error?.message || '');
+}
+
+function normalizeLlmContentText(text, {responseFormatJson = false} = {}) {
+  const raw = String(text ?? '');
+  if (!responseFormatJson) return raw.replace(/^\s+/, '');
+
+  const trimmed = raw.trim();
+  if (!trimmed) return '';
+
+  const firstObject = trimmed.indexOf('{');
+  const lastObject = trimmed.lastIndexOf('}');
+  if (firstObject !== -1 && lastObject > firstObject) {
+    return trimmed.slice(firstObject, lastObject + 1);
+  }
+  return trimmed;
+}
+
 async function getLlmSettings() {
   const script = await readScript().catch(() => ({}));
-  const apiKey = script.llmApiKey || script.transcribeApiKey || process.env.OPENAI_API_KEY || null;
+  const apiKey = process.env.MOONSHOT_API_KEY || script.llmApiKey || script.transcribeApiKey || process.env.OPENAI_API_KEY || null;
   let baseUrl = (
-    process.env.OPENAI_BASE_URL
+    process.env.MOONSHOT_BASE_URL
+    || process.env.OPENAI_BASE_URL
     || script.llmBaseUrl
     || script.transcribeBaseUrl
     || 'https://api.openai.com'
@@ -854,11 +1165,79 @@ async function getLlmSettings() {
   return {
     apiKey,
     baseUrl,
-    model: script.llmModel || process.env.OPENAI_MODEL || 'gpt-4o-mini',
+    model: process.env.MOONSHOT_MODEL || script.llmModel || process.env.OPENAI_MODEL || 'gpt-4o-mini',
   };
 }
 
-async function streamFallbackText(res, fallback, provider = 'fallback', transformText = null) {
+function llmTemperature(model, requested = 0.7) {
+  return isKimiK26(model) ? 1 : requested;
+}
+
+function isKimiK26(model) {
+  return /^kimi-k2\.6(?:$|[-_:.])/i.test(String(model || ''));
+}
+
+function buildChatRequestBody(selectedModel, messages, {temperature = 0.7, stream = false, maxTokens = null, forceNonStreaming = false, responseFormatJson = false} = {}) {
+  const body = {
+    model: selectedModel,
+    messages,
+    temperature: llmTemperature(selectedModel, temperature),
+  };
+  if (responseFormatJson) {
+    body.response_format = {type: 'json_object'};
+  }
+  if (isKimiK26(selectedModel) && !forceNonStreaming) {
+    return {
+      ...body,
+      temperature: 1,
+      max_tokens: maxTokens ?? 32768,
+      top_p: 0.95,
+      stream: true,
+      thinking: {type: 'enabled'},
+    };
+  }
+  if (stream) body.stream = true;
+  if (maxTokens) body.max_tokens = maxTokens;
+  return body;
+}
+
+async function readChatStreamText(response, {responseFormatJson = false} = {}) {
+  if (!response.body) throw new Error('LLM response has no stream body');
+  const decoder = new TextDecoder();
+  const reader = response.body.getReader();
+  let buffer = '';
+  let text = '';
+  let emittedText = '';
+  let thinking = '';
+
+  const consumeLine = (line) => {
+    if (!line.startsWith('data:')) return false;
+    const payload = line.slice(5).trim();
+    if (!payload) return false;
+    if (payload === '[DONE]') return true;
+    const data = JSON.parse(payload);
+    const choice = data.choices?.[0] ?? {};
+    const delta = choice.delta ?? choice.message ?? {};
+    thinking += delta.reasoning_content ?? delta.reasoning ?? delta.thinking ?? '';
+    text += delta.content ?? '';
+    return false;
+  };
+
+  while (true) {
+    const {done, value} = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, {stream: true});
+    const lines = buffer.split(/\r?\n/);
+    buffer = lines.pop() ?? '';
+    for (const line of lines) {
+      if (consumeLine(line)) return {text: normalizeLlmContentText(text, {responseFormatJson}), thinking};
+    }
+  }
+  if (buffer.trim()) consumeLine(buffer.trim());
+  return {text: normalizeLlmContentText(text, {responseFormatJson}), thinking};
+}
+
+async function streamFallbackText(res, fallback, provider = 'fallback', transformText = null, beforeDone = null) {
   sendSse(res, 'status', {message: '未配置 LLM API Key，使用本地兜底内容', provider});
   const finalText = transformText ? transformText(fallback) : fallback;
   const chunks = finalText.match(/.{1,18}/gs) ?? [finalText];
@@ -868,32 +1247,46 @@ async function streamFallbackText(res, fallback, provider = 'fallback', transfor
     sendSse(res, 'token', {delta: chunk, text, provider});
     await sleep(35);
   }
+  beforeDone?.({text: finalText, rawText: fallback, thinking: '', provider});
   sendSse(res, 'done', {text, thinking: '', provider});
   return {text, thinking: '', provider};
 }
 
-async function streamNonStreamingChat(res, settings, selectedModel, system, user, reasonText = '', transformText = null) {
+async function streamNonStreamingChat(res, settings, selectedModel, system, user, reasonText = '', transformText = null, beforeDone = null, responseFormatJson = false, signal = null) {
   sendSse(res, 'status', {
     message: reasonText ? '流式响应不可用，切换为普通响应' : '使用普通响应生成 LLM 内容',
     provider: 'openai',
     model: selectedModel,
   });
 
-  const response = await fetch(`${settings.baseUrl}/v1/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${settings.apiKey}`,
-    },
-    body: JSON.stringify({
+  let waitSeconds = 0;
+  const waitTimer = setInterval(() => {
+    waitSeconds += 5;
+    sendSse(res, 'status', {
+      message: `Kimi is still generating (${waitSeconds}s)`,
+      provider: 'openai',
       model: selectedModel,
-      messages: [
-        {role: 'system', content: system},
-        {role: 'user', content: user},
-      ],
-      temperature: 0.7,
-    }),
-  });
+    });
+  }, 5000);
+
+  let response;
+  try {
+    const requestBody = buildChatRequestBody(selectedModel, [
+      {role: 'system', content: system},
+      {role: 'user', content: user},
+    ], {temperature: 0.7, forceNonStreaming: true, responseFormatJson});
+    response = await fetch(`${settings.baseUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${settings.apiKey}`,
+      },
+      signal,
+      body: JSON.stringify(requestBody),
+    });
+  } finally {
+    clearInterval(waitTimer);
+  }
 
   const payloadText = await response.text();
   let data = null;
@@ -905,9 +1298,11 @@ async function streamNonStreamingChat(res, settings, selectedModel, system, user
     throw new Error(`LLM 请求失败（model=${selectedModel}）：${message}`);
   }
 
+  const rawText = data?.choices?.[0]?.message?.content || '';
+  const normalizedRawText = normalizeLlmContentText(rawText, {responseFormatJson});
   const fullText = transformText
-    ? transformText(data?.choices?.[0]?.message?.content || '')
-    : data?.choices?.[0]?.message?.content || '';
+    ? transformText(normalizedRawText)
+    : normalizedRawText;
   const chunks = fullText.match(/.{1,24}/gs) ?? [fullText];
   let text = '';
   for (const chunk of chunks) {
@@ -915,14 +1310,15 @@ async function streamNonStreamingChat(res, settings, selectedModel, system, user
     sendSse(res, 'token', {delta: chunk, text, provider: 'openai'});
     await sleep(20);
   }
+  beforeDone?.({text: fullText, rawText: normalizedRawText, thinking: '', provider: 'openai'});
   sendSse(res, 'done', {text, thinking: '', provider: 'openai'});
   return {text, thinking: '', provider: 'openai'};
 }
 
-async function streamLlmChat(res, {system, user, fallback, model, transformText = null}) {
+async function streamLlmChat(res, {system, user, fallback, model, transformText = null, beforeDone = null, responseFormatJson = false, signal = null}) {
   const settings = await getLlmSettings();
   if (!settings.apiKey) {
-    return streamFallbackText(res, fallback, 'fallback', transformText);
+    return streamFallbackText(res, fallback, 'fallback', transformText, beforeDone);
   }
 
   const selectedModel = model || settings.model;
@@ -932,15 +1328,10 @@ async function streamLlmChat(res, {system, user, fallback, model, transformText 
     model: selectedModel,
   });
 
-  const requestBody = {
-    model: selectedModel,
-    messages: [
-      {role: 'system', content: system},
-      {role: 'user', content: user},
-    ],
-    temperature: 0.7,
-    stream: true,
-  };
+  const requestBody = buildChatRequestBody(selectedModel, [
+    {role: 'system', content: system},
+    {role: 'user', content: user},
+  ], {temperature: 0.7, stream: true, maxTokens: 32768, responseFormatJson});
 
   const response = await fetch(`${settings.baseUrl}/v1/chat/completions`, {
     method: 'POST',
@@ -948,13 +1339,14 @@ async function streamLlmChat(res, {system, user, fallback, model, transformText 
       'Content-Type': 'application/json',
       Authorization: `Bearer ${settings.apiKey}`,
     },
+    signal,
     body: JSON.stringify(requestBody),
   });
 
   if (!response.ok) {
     const errorText = await response.text();
     if (/unsupported|not support|stream/i.test(errorText)) {
-      return streamNonStreamingChat(res, settings, selectedModel, system, user, errorText, transformText);
+      return streamNonStreamingChat(res, settings, selectedModel, system, user, errorText, transformText, beforeDone, responseFormatJson, signal);
     }
     throw new Error(`LLM 请求失败（model=${selectedModel}）：${errorText}`);
   }
@@ -975,7 +1367,8 @@ async function streamLlmChat(res, {system, user, fallback, model, transformText 
     if (payload === '[DONE]') return true;
 
     const data = JSON.parse(payload);
-    const delta = data.choices?.[0]?.delta ?? {};
+    const choice = data.choices?.[0] ?? {};
+    const delta = choice.delta ?? choice.message ?? {};
     const thinkingDelta = delta.reasoning_content ?? delta.reasoning ?? delta.thinking ?? '';
     const contentDelta = delta.content ?? '';
 
@@ -986,7 +1379,13 @@ async function streamLlmChat(res, {system, user, fallback, model, transformText 
     if (contentDelta) {
       text += contentDelta;
       if (!transformText) {
-        sendSse(res, 'token', {delta: contentDelta, text});
+        let displayDelta = contentDelta;
+        if (!emittedText) {
+          displayDelta = displayDelta.replace(/^\s+/, '');
+          if (!displayDelta) return false;
+        }
+        emittedText += displayDelta;
+        sendSse(res, 'token', {delta: displayDelta, text: emittedText, provider: 'openai'});
       }
     }
     return false;
@@ -1000,8 +1399,12 @@ async function streamLlmChat(res, {system, user, fallback, model, transformText 
     buffer = lines.pop() ?? '';
     for (const line of lines) {
       if (consumeLine(line)) {
-        const finalText = transformText ? transformText(text) : text;
+        const normalizedText = normalizeLlmContentText(text, {responseFormatJson});
+        const finalText = transformText
+          ? transformText(normalizedText)
+          : normalizeLlmContentText(emittedText || text, {responseFormatJson});
         if (transformText) sendSse(res, 'token', {delta: finalText, text: finalText, provider: 'openai'});
+        beforeDone?.({text: finalText, rawText: normalizedText, thinking, provider: 'openai'});
         sendSse(res, 'done', {text: finalText, thinking, provider: 'openai'});
         return {text: finalText, thinking, provider: 'openai'};
       }
@@ -1009,8 +1412,12 @@ async function streamLlmChat(res, {system, user, fallback, model, transformText 
   }
 
   if (buffer.trim()) consumeLine(buffer.trim());
-  const finalText = transformText ? transformText(text) : text;
+  const normalizedText = normalizeLlmContentText(text, {responseFormatJson});
+  const finalText = transformText
+    ? transformText(normalizedText)
+    : normalizeLlmContentText(emittedText || text, {responseFormatJson});
   if (transformText) sendSse(res, 'token', {delta: finalText, text: finalText, provider: 'openai'});
+  beforeDone?.({text: finalText, rawText: normalizedText, thinking, provider: 'openai'});
   sendSse(res, 'done', {text: finalText, thinking, provider: 'openai'});
   return {text: finalText, thinking, provider: 'openai'};
 }
@@ -1022,6 +1429,7 @@ app.post('/api/scene/tune-codegen/stream', async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders?.();
+  const abortSignal = createResponseAbortSignal(res);
 
   try {
     if (!sceneId || !/^scene\d+$/i.test(sceneId)) throw new Error('sceneId is required');
@@ -1078,7 +1486,9 @@ app.post('/api/scene/tune-codegen/stream', async (req, res) => {
         '',
         `精确字幕/词块时间轴:\n${timing.summary}`,
       ].join('\n'),
+      signal: abortSignal,
     });
+    if (abortSignal.aborted) return;
 
     Object.assign(codegenState, {
       running: true,
@@ -1088,10 +1498,12 @@ app.post('/api/scene/tune-codegen/stream', async (req, res) => {
       message: `根据对话微调 ${sceneId} Remotion 代码`,
       startTime: Date.now(),
       endTime: null,
-      targetFile: null,
+      targetFile: generatedSceneFile(sceneId),
       error: null,
       result: null,
       logs: [],
+      commandCount: 0,
+      fileChanges: [],
     });
     appendCodegenLog(codegenState.message);
     sendSse(res, 'codegen_status', {status: codegenSnapshot()});
@@ -1116,10 +1528,12 @@ app.post('/api/scene/tune-codegen/stream', async (req, res) => {
     codegenState.endTime = Date.now();
     codegenState.targetFile = result.targetFile ?? null;
     codegenState.result = result;
+    await refreshCodegenChanges();
     appendCodegenLog(codegenState.message);
     await buildManifest().catch((error) => appendCodegenLog(`Manifest rebuild failed: ${error.message || error}`));
     sendSse(res, 'codegen_done', {result, status: codegenSnapshot(), config: nextScript});
   } catch (e) {
+    if (abortSignal.aborted || isAbortError(e)) return;
     codegenState.running = false;
     codegenState.step = 'failed';
     codegenState.message = `${sceneId ?? 'scene'} Remotion 代码微调失败`;
@@ -1175,6 +1589,7 @@ app.post('/api/scene/design/stream', async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders?.();
+  const abortSignal = createResponseAbortSignal(res);
 
   try {
     if (!sceneId || !text?.trim()) throw new Error('sceneId and text are required');
@@ -1199,8 +1614,10 @@ app.post('/api/scene/design/stream', async (req, res) => {
       system: CONCISE_DESIGN_SYSTEM_PROMPT,
       user: `sceneId: ${sceneId}\n文案: ${text}\n用户设计要求: ${prompt || '(empty)'}\n旧设计方案处理规则: ${previousDesignContext(currentDesignNotes, prompt)}\n精确时长: ${preciseDuration ? `${preciseDuration}秒` : '未知'}\n\nMedia assets and visual references:\n${assetContext}\n\n精简时间轴，禁止逐词复述:\n${compactTimingForDesign(timing)}`,
       transformText: (text) => normalizeDesignBrief(text, fallback),
+      signal: abortSignal,
     });
   } catch (e) {
+    if (abortSignal.aborted || isAbortError(e)) return;
     sendSse(res, 'error', {error: e.message});
   } finally {
     res.end();
@@ -1209,6 +1626,50 @@ app.post('/api/scene/design/stream', async (req, res) => {
 
 app.get('/api/scene/codegen/status', (req, res) => {
   res.json(codegenSnapshot());
+});
+
+app.get('/api/video-agent/status', (req, res) => {
+  res.json(getVideoAgentStatus());
+});
+
+app.post('/api/video-agent/run', async (req, res) => {
+  try {
+    const status = await startVideoAgentRun(req.body || {});
+    res.json({success: true, status});
+  } catch (e) {
+    res.status(e.status ?? 500).json({error: e.message, status: e.state ?? getVideoAgentStatus()});
+  }
+});
+
+app.get('/api/video-agent/stream', (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders?.();
+
+  const send = (event, payload) => {
+    res.write(`event: ${event}\n`);
+    res.write(`data: ${JSON.stringify(payload)}\n\n`);
+  };
+
+  send('status', getVideoAgentStatus());
+  let sentCount = getVideoAgentStatus().events.length;
+  const unsubscribe = subscribeVideoAgent((event, status) => {
+    send(event?.type || 'event', {event, status});
+    sentCount = status.events.length;
+  });
+  const replay = setInterval(() => {
+    const status = getVideoAgentStatus();
+    const pending = status.events.slice(sentCount);
+    pending.forEach((event) => send(event?.type || 'event', {event, status}));
+    sentCount = status.events.length;
+    res.write(':heartbeat\n\n');
+  }, 15000);
+
+  req.on('close', () => {
+    clearInterval(replay);
+    unsubscribe();
+  });
 });
 
 app.post('/api/scene/codegen', async (req, res) => {
@@ -1235,10 +1696,12 @@ app.post('/api/scene/codegen', async (req, res) => {
       message: `准备生成 ${sceneId} Remotion 代码`,
       startTime: Date.now(),
       endTime: null,
-      targetFile: null,
+      targetFile: generatedSceneFile(sceneId),
       error: null,
       result: null,
       logs: [],
+      commandCount: 0,
+      fileChanges: [],
     });
     appendCodegenLog(codegenState.message);
 
@@ -1260,6 +1723,7 @@ app.post('/api/scene/codegen', async (req, res) => {
       codegenState.endTime = Date.now();
       codegenState.targetFile = result.targetFile ?? null;
       codegenState.result = result;
+      await refreshCodegenChanges();
       appendCodegenLog(codegenState.message);
       await buildManifest().catch((error) => appendCodegenLog(`Manifest rebuild failed: ${error.message || error}`));
     }).catch((error) => {
@@ -1521,6 +1985,18 @@ app.get('/api/pipeline/stream', (req, res) => {
 
 app.get('/api/render/status', async (req, res) => {
   res.json(await getRenderStatus());
+});
+
+app.post('/api/render/preview/clear', async (req, res) => {
+  const {sceneId = null} = req.body || {};
+  try {
+    if (!sceneId || !/^scene\d+$/i.test(sceneId)) throw new Error('sceneId is required');
+    const outputFile = path.join('output', `${sceneId}.preview.mp4`);
+    await fs.rm(resolveFromRoot(outputFile), {force: true});
+    res.json({success: true, outputFile});
+  } catch (e) {
+    res.status(400).json({error: e.message || String(e)});
+  }
 });
 
 app.post('/api/render', async (req, res) => {

@@ -68,7 +68,8 @@ export function SceneWorkflowStrip({
 
 const wrapStyle: CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: 'auto minmax(0, 1fr) auto',
+  gridTemplateColumns: 'minmax(0, 1fr) auto',
+  gridTemplateAreas: '"meta commit" "rail rail"',
   alignItems: 'center',
   gap: 12,
   border: '1px solid rgba(255,255,255,0.08)',
@@ -76,16 +77,16 @@ const wrapStyle: CSSProperties = {
   borderRadius: 14,
   padding: 10,
 };
-const metaStyle: CSSProperties = {display: 'grid', gap: 2, minWidth: 116};
+const metaStyle: CSSProperties = {gridArea: 'meta', display: 'flex', alignItems: 'baseline', gap: 10, minWidth: 0};
 const kickerStyle: CSSProperties = {fontSize: 11, color: '#8c8c8c', fontWeight: 800};
-const statusTextStyle: CSSProperties = {fontSize: 12, color: '#a8a8a8', maxWidth: 170, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'};
-const sceneRailStyle: CSSProperties = {display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 1};
+const statusTextStyle: CSSProperties = {fontSize: 12, color: '#a8a8a8', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'};
+const sceneRailStyle: CSSProperties = {gridArea: 'rail', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(104px, 1fr))', gap: 8};
 const sceneChipStyle = (active: boolean, busy: boolean): CSSProperties => {
   const color = busy ? '#ffb703' : active ? '#f2f2f2' : '#a8a8a8';
   return {
     display: 'grid',
     gap: 3,
-    minWidth: 118,
+    minHeight: 72,
     textAlign: 'left',
     border: `1px solid ${active ? 'rgba(255,255,255,0.32)' : busy ? 'rgba(255,183,3,0.34)' : 'rgba(255,255,255,0.08)'}`,
     background: active ? '#2b2b2b' : busy ? 'rgba(255,183,3,0.08)' : '#202020',
@@ -98,6 +99,7 @@ const sceneChipStyle = (active: boolean, busy: boolean): CSSProperties => {
 const sceneTitleStyle: CSSProperties = {display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center', fontSize: 13};
 const sceneDetailStyle: CSSProperties = {fontSize: 11, color: '#8c8c8c'};
 const commitButtonStyle = (disabled: boolean): CSSProperties => ({
+  gridArea: 'commit',
   border: '1px solid rgba(255,255,255,0.14)',
   background: disabled ? '#292929' : '#f2f2f2',
   color: disabled ? '#777' : '#111',

@@ -45,7 +45,7 @@ export function PreviewDeck({
     <main style={wrapStyle}>
       <header style={headerStyle}>
         <div>
-          <span style={kickerStyle}>Current Scene</span>
+          <span style={kickerStyle}>当前场景</span>
           <h2 style={titleStyle}>{scene.id} · {readiness.nextAction}</h2>
           <p style={mutedStyle}>
             {formatDuration(scene.durationMs)} · {scene.cues?.length ?? 0} 个字幕片段 · {scene.assets?.length ?? 0} 个素材
@@ -141,7 +141,7 @@ export function PreviewDeck({
   );
 }
 
-const wrapStyle: CSSProperties = {minWidth: 0, height: '100%', overflow: 'auto', padding: 18, background: '#0b111c'};
+const wrapStyle: CSSProperties = {minWidth: 0, minHeight: '100%', overflow: 'visible', padding: 18, background: '#0b111c'};
 const headerStyle: CSSProperties = {display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 14};
 const headerActionsStyle: CSSProperties = {display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end'};
 const kickerStyle: CSSProperties = {fontSize: 11, color: '#2ec4b6', fontWeight: 900, textTransform: 'uppercase', letterSpacing: 0.8};
@@ -149,7 +149,7 @@ const titleStyle: CSSProperties = {margin: '3px 0 4px', fontSize: 20, color: '#f
 const mutedStyle: CSSProperties = {margin: 0, color: '#8ea3bb', fontSize: 12};
 const previewSurfaceStyle: CSSProperties = {background: '#02050b', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, overflow: 'hidden', marginBottom: 12};
 const playerStyle: CSSProperties = {width: '100%', aspectRatio: '16 / 9', background: '#000'};
-const lowerGridStyle: CSSProperties = {display: 'grid', gridTemplateColumns: 'minmax(220px, 0.7fr) 1fr', gap: 12, marginBottom: 12};
+const lowerGridStyle: CSSProperties = {display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))', gap: 12, marginBottom: 12};
 const panelStyle: CSSProperties = {border: '1px solid rgba(255,255,255,0.08)', background: 'rgba(255,255,255,0.035)', borderRadius: 8, padding: 12};
 const panelHeadStyle: CSSProperties = {display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 10, color: '#e6edf3', fontSize: 13};
 const timelineStyle: CSSProperties = {display: 'grid', gap: 6, maxHeight: 190, overflow: 'auto'};

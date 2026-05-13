@@ -1,4 +1,4 @@
-import React, {useCallback, useEffect, useMemo, useState} from 'react';
+import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {PreviewDeck} from './components/PreviewDeck';
 import {SceneAssetsDrawer} from './components/SceneAssetsDrawer';
 import {SceneWorkflowStrip} from './components/SceneWorkflowStrip';
@@ -23,6 +23,13 @@ import type {
 
 type DrawerKind = 'progress' | 'preview' | 'assets' | 'logs' | null;
 type BackgroundJob = {sceneId: string; phase: string};
+type AgentTrace = {
+  id: string;
+  ts: number;
+  kind: 'think' | 'tool' | 'file' | 'check' | 'done' | 'error';
+  title: string;
+  detail?: string;
+};
 
 const makeId = (prefix: string) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const MEDIA_ACCEPT = 'image/*,video/*,audio/*,.mp3,.wav,.m4a,.mp4,.mov,.webm,.png,.jpg,.jpeg,.gif';
@@ -58,6 +65,40 @@ const uniqueAlias = (base: string, taken: Set<string>) => {
   taken.add(candidate);
   return candidate;
 };
+
+const compactErrorMessage = (error: unknown) => {
+  const raw = error instanceof Error ? error.message : String(error);
+  const normalized = raw.replace(/\s+/g, ' ').trim();
+  const title = normalized.match(/<title>(.*?)<\/title>/i)?.[1]?.replace(/\s+/g, ' ').trim();
+  if (title) return title;
+  return normalized.length > 220 ? `${normalized.slice(0, 220)}...` : normalized;
+};
+
+const compactTraceDetail = (value: unknown, max = 260) => {
+  const text = typeof value === 'string' ? value : JSON.stringify(value ?? '');
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  return normalized.length > max ? `${normalized.slice(0, max)}...` : normalized;
+};
+
+const isAbortError = (error: unknown) => (
+  error instanceof DOMException && error.name === 'AbortError'
+) || (
+  error instanceof Error && error.name === 'AbortError'
+);
+
+const buildPipelineTuningNotes = (sceneId: string, text: string, prompt: string) => [
+  `## 当前执行要求 ${new Date().toISOString()}`,
+  '',
+  `### sceneId\n${sceneId}`,
+  '',
+  `### 本轮文案\n${text}`,
+  '',
+  `### 本轮用户/Agent 要求\n${prompt || '(empty)'}`,
+  '',
+  '执行规则：本轮要求覆盖旧 tuningNotes；如果本轮要求包含 @asset 或 @alias，代码生成必须把这些素材作为可入画素材优先处理。不要沿用旧的“禁用素材”或旧排版要求，除非本轮明确保留。',
+].join('\n');
+
+const fileBaseName = (file: string) => file.split(/[\\/]/).filter(Boolean).pop() || file;
 
 const inferAttachmentKind = (file: File): AgentAttachmentDraft['kind'] => {
   if (file.type.startsWith('image/')) return 'image';
@@ -116,7 +157,7 @@ export default function AgentStudioApp() {
   const [cacheKey, setCacheKey] = useState(Date.now());
   const [mode, setMode] = useState<AgentMode>('review');
   const [drawer, setDrawer] = useState<DrawerKind>(null);
-  const [input, setInput] = useState('');
+  const [inputByScene, setInputByScene] = useState<Record<string, string>>({});
   const [messages, setMessages] = useState<AgentMessage[]>([
     {
       id: 'system-welcome',
@@ -125,19 +166,27 @@ export default function AgentStudioApp() {
     },
   ]);
   const [agentActions, setAgentActions] = useState<AgentAction[]>([]);
+  const [pendingAutoAction, setPendingAutoAction] = useState<AgentAction | null>(null);
   const [agentRunning, setAgentRunning] = useState(false);
   const [actionRunning, setActionRunning] = useState<string | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
+  const [agentTrace, setAgentTrace] = useState<AgentTrace[]>([]);
   const [attachments, setAttachments] = useState<AgentAttachmentDraft[]>([]);
   const [stages, setStages] = useState<AgentStageStep[]>(cloneStages);
   const [scriptDraft, setScriptDraft] = useState('');
   const [scriptEditOpen, setScriptEditOpen] = useState(false);
   const [backgroundJob, setBackgroundJob] = useState<BackgroundJob | null>(null);
+  const threadRef = useRef<HTMLElement | null>(null);
+  const agentAbortRef = useRef<AbortController | null>(null);
+  const abortRequestedRef = useRef(false);
+  const lastThinkingTraceAtRef = useRef(0);
 
   const selectedScene = useMemo(
     () => scenes.find((scene) => scene.id === selectedId) ?? scenes[0] ?? null,
     [scenes, selectedId],
   );
+  const currentSceneId = selectedScene?.id ?? selectedId;
+  const currentInput = currentSceneId ? inputByScene[currentSceneId] ?? '' : '';
   const fps = config?.fps ?? 30;
   const selectedSceneDrafts = useMemo(
     () => attachments.filter((item) => item.sceneId === selectedScene?.id),
@@ -150,21 +199,58 @@ export default function AgentStudioApp() {
   const backendRunning = Boolean(tts?.running || codegen?.running || render?.running || pipeline?.running);
   const generationBusy = Boolean(actionRunning || backgroundJob || backendRunning);
   const chatBusy = agentRunning;
+  const activityFiles = useMemo(() => {
+    const files = new Map<string, {file: string; additions: number; deletions: number}>();
+    for (const item of codegen?.fileChanges ?? []) {
+      files.set(item.file, item);
+    }
+    const target = codegen?.targetFile || codegen?.result?.targetFile || null;
+    if (target && !files.has(target)) files.set(target, {file: target, additions: 0, deletions: 0});
+    if (agentTrace.some((item) => item.title.includes('script.json'))) {
+      files.set('src/composer/script.json', {file: 'src/composer/script.json', additions: 0, deletions: 0});
+    }
+    return [...files.values()];
+  }, [agentTrace, codegen?.fileChanges, codegen?.result?.targetFile, codegen?.targetFile]);
+  const activityCommandCount = Math.max(
+    codegen?.commandCount ?? 0,
+    agentTrace.filter((item) => item.kind === 'tool' || item.kind === 'check').length,
+  );
+  const showActivity = Boolean(agentRunning || generationBusy || agentTrace.length || activityFiles.length);
   const runState = backgroundJob ? `${backgroundJob.sceneId} · ${backgroundJob.phase}` : getRunStateText(tts, codegen, render, pipeline);
 
   useEffect(() => {
     setScriptDraft(selectedScene?.text ?? '');
   }, [selectedScene?.id, selectedScene?.text]);
 
+  useEffect(() => {
+    const el = threadRef.current;
+    if (!el) return;
+    el.scrollTo({top: el.scrollHeight, behavior: 'smooth'});
+  }, [messages, agentRunning, agentActions.length, agentTrace.length]);
+
   const pushLog = useCallback((line: string) => {
     setLogs((current) => [...current.slice(-180), `[${new Date().toLocaleTimeString()}] ${line}`]);
+  }, []);
+
+  const pushTrace = useCallback((kind: AgentTrace['kind'], title: string, detail?: unknown) => {
+    setAgentTrace((current) => [
+      ...current.slice(-79),
+      {
+        id: makeId('trace'),
+        ts: Date.now(),
+        kind,
+        title,
+        detail: detail === undefined ? undefined : compactTraceDetail(detail),
+      },
+    ]);
   }, []);
 
   const setStage = useCallback((id: AgentStageId, status: AgentStageStatus, detail: string) => {
     setStages((current) => current.map((stage) => (
       stage.id === id ? {...stage, status, detail} : stage
     )));
-  }, []);
+    pushTrace(status === 'failed' ? 'error' : status === 'done' ? 'done' : 'tool', `${id}: ${status}`, detail);
+  }, [pushTrace]);
 
   const refresh = useCallback(async () => {
     const [cfg, sceneStatus, renderStatus, ttsStatus, codegenStatus, pipelineStatus] = await Promise.all([
@@ -268,11 +354,13 @@ export default function AgentStudioApp() {
   }, [attachments, mode, pushLog, refresh, setStage]);
 
   const appendMention = useCallback((mention: string) => {
-    setInput((current) => {
+    if (!currentSceneId) return;
+    setInputByScene((drafts) => {
+      const current = drafts[currentSceneId] ?? '';
       const spacer = current && !/\s$/.test(current) ? ' ' : '';
-      return `${current}${spacer}${mention} `;
+      return {...drafts, [currentSceneId]: `${current}${spacer}${mention} `};
     });
-  }, []);
+  }, [currentSceneId]);
 
   const recentConversationText = useCallback(() => messages.slice(-8).map((message) => {
     const role = message.role === 'user' ? '用户' : message.role === 'agent' ? 'Agent' : '系统';
@@ -317,17 +405,32 @@ export default function AgentStudioApp() {
   }, []);
 
   const waitForCodegen = useCallback(async (sceneId: string) => {
-    for (let attempt = 0; attempt < 180; attempt++) {
+    let lastMessage = '';
+    let lastLogCount = 0;
+    while (true) {
       const status = await fetchJson<CodegenStatus>('/api/scene/codegen/status');
       setCodegen(status);
+      const message = status.message || status.step || '';
+      if (message && message !== lastMessage) {
+        lastMessage = message;
+        pushTrace(status.error ? 'error' : 'tool', `Codegen: ${message}`, status.targetFile || status.sceneId || sceneId);
+      }
+      const logs = status.logs ?? [];
+      if (logs.length > lastLogCount) {
+        logs.slice(lastLogCount).slice(-4).forEach((line) => {
+          const kind = /Wrote|Target|Done/i.test(line) ? 'file' : /check|validation|tsc|render smoke/i.test(line) ? 'check' : 'tool';
+          pushTrace(kind, line.replace(/^\[scene-agent\]\s*/, ''));
+        });
+        lastLogCount = logs.length;
+      }
       if (!status.running && status.sceneId === sceneId) {
         if (status.error) throw new Error(status.error);
+        if (status.targetFile) pushTrace('done', 'Codegen done', status.targetFile);
         return status;
       }
-      await new Promise((resolve) => window.setTimeout(resolve, 1200));
+      await new Promise((resolve) => window.setTimeout(resolve, 1800));
     }
-    throw new Error('代码生成等待超时');
-  }, []);
+  }, [pushTrace]);
 
   const waitForRender = useCallback(async () => {
     for (let attempt = 0; attempt < 240; attempt++) {
@@ -344,6 +447,11 @@ export default function AgentStudioApp() {
 
   const askAgent = useCallback(async (userMessage: string) => {
     if (!userMessage.trim() || agentRunning) return;
+    agentAbortRef.current?.abort();
+    const controller = new AbortController();
+    agentAbortRef.current = controller;
+    abortRequestedRef.current = false;
+    lastThinkingTraceAtRef.current = 0;
     const sceneId = selectedScene?.id ?? selectedId;
     const sceneDrafts = attachments.filter((item) => item.sceneId === sceneId);
     const attachmentMeta = sceneDrafts.map((item) => ({
@@ -394,15 +502,29 @@ export default function AgentStudioApp() {
       }, {
         status: (payload) => {
           if (payload.message) pushLog(payload.message);
+          pushTrace('think', payload.message || 'Agent status', payload.model || payload.provider);
+        },
+        thinking: (payload) => {
+          const thinkingText = String(payload.text ?? payload.delta ?? '').trim();
+          if (!thinkingText) return;
+          const now = Date.now();
+          if (now - lastThinkingTraceAtRef.current < 1200) return;
+          lastThinkingTraceAtRef.current = now;
+          pushTrace('think', 'Kimi 思考流', thinkingText.slice(-180));
         },
         token: (payload) => {
           updateAgentMessage(agentId, payload.text ?? '');
         },
         actions: (payload) => {
-          setAgentActions(Array.isArray(payload.actions) ? payload.actions : []);
+          const nextActions = Array.isArray(payload.actions) ? payload.actions : [];
+          setAgentActions(nextActions);
+          const autoAction = nextActions.find((item: AgentAction) => item.type === 'rewrite_scene_pipeline') ?? null;
+          if (autoAction) setPendingAutoAction(autoAction);
+          pushTrace('tool', `Actions ready: ${nextActions.length}`, nextActions.map((item: AgentAction) => item.label).join(' / '));
         },
         done: async (payload) => {
           updateAgentMessage(agentId, payload.text ?? '');
+          pushTrace('done', 'Agent response complete', payload.provider || '');
           setStage('understanding', 'done', 'Agent 已完成目标理解。');
           if (mode === 'advice') {
             setStage('script', 'paused', '建议模式只输出方案，不执行制作流水线。');
@@ -416,16 +538,101 @@ export default function AgentStudioApp() {
           setStage('understanding', 'failed', payload.error || 'Agent 计划失败');
           pushLog(`Agent 计划失败：${payload.error || 'unknown error'}`);
         },
+      }, {
+        signal: controller.signal,
       });
     } catch (error) {
+      if (isAbortError(error) || abortRequestedRef.current) {
+        updateAgentMessage(agentId, '已中断当前 Agent 响应。');
+        setStage('understanding', 'paused', '当前 Agent 响应已中断，待执行动作已清空。');
+        pushLog('Agent 响应已中断');
+        return;
+      }
       const message = error instanceof Error ? error.message : String(error);
       updateAgentMessage(agentId, `执行失败：${message}`);
       setStage('understanding', 'failed', message);
       pushLog(`Agent 执行失败：${message}`);
     } finally {
+      if (agentAbortRef.current === controller) agentAbortRef.current = null;
+      abortRequestedRef.current = false;
       setAgentRunning(false);
     }
   }, [agentRunning, attachments, messages, mode, pushLog, selectedId, selectedScene?.assets, selectedScene?.id, setStage, updateAgentMessage]);
+
+  const runScenePipeline = useCallback(async (sceneId: string, text: string, prompt = '') => {
+    const nextText = text.trim();
+    if (!nextText) throw new Error('Missing scene script text');
+    const scene = scenes.find((item) => item.id === sceneId) ?? selectedScene;
+    if (!scene) throw new Error(`Scene not found: ${sceneId}`);
+    const effectivePrompt = [
+      prompt.trim(),
+      buildSceneCommitPrompt(sceneId, nextText),
+    ].filter(Boolean).join('\n\n');
+
+    setDrawer('progress');
+    setStage('script', 'running', `Writing ${sceneId} script to script.json`);
+    pushTrace('file', 'Editing script.json', `${sceneId}: ${nextText}`);
+    let latestConfig = await persistSceneText(sceneId, nextText);
+    setScriptDraft(nextText);
+    setStage('script', 'done', `${sceneId} script saved`);
+
+    setStage('assets', 'running', `Writing ${sceneId} asset metadata`);
+    await uploadAttachments(sceneId);
+    setStage('assets', 'done', `${sceneId} assets ready`);
+
+    setStage('tts', 'running', `Running TTS for ${sceneId}`);
+    pushTrace('tool', 'Run TTS', sceneId);
+    await postJson('/api/tts', {sceneId, force: true});
+    setStage('tts', 'done', `${sceneId} TTS done`);
+
+    setStage('asr', 'running', `Running ASR alignment for ${sceneId}`);
+    pushTrace('tool', 'Run ASR alignment', sceneId);
+    await postJson('/api/asr', {sceneId, force: true});
+    setStage('asr', 'done', `${sceneId} captions aligned`);
+
+    const latestScene = (await fetchJson<{fps: number; scenes: SceneItem[]}>('/api/scenes')).scenes.find((item) => item.id === sceneId) ?? scene;
+    latestConfig = await fetchJson<Config>('/api/config');
+    const configScene = latestConfig.scenes.find((item) => item.id === sceneId);
+    if (!configScene) throw new Error(`Scene not found in config: ${sceneId}`);
+
+    setStage('design', 'running', `Generating visual brief for ${sceneId}`);
+    pushTrace('tool', 'Generate visual brief', prompt || sceneId);
+    const design = await postJson<{design: string; provider: string}>('/api/scene/design', {
+      sceneId,
+      text: nextText,
+      durationMs: latestScene.durationMs,
+      prompt: effectivePrompt,
+      currentDesignNotes: configScene.designNotes ?? '',
+    });
+    const afterDesign = await fetchJson<Config>('/api/config');
+    const nextConfig = {
+      ...afterDesign,
+      scenes: afterDesign.scenes.map((item) => (
+        item.id === sceneId
+          ? {...item, text: nextText, designNotes: design.design, tuningNotes: buildPipelineTuningNotes(sceneId, nextText, effectivePrompt)}
+          : item
+      )),
+    };
+    await postJson('/api/config', nextConfig);
+    setConfig(nextConfig);
+    setStage('design', 'done', `${sceneId} visual brief saved`);
+
+    setStage('codegen', 'running', `Generating Remotion code for ${sceneId}`);
+    pushTrace('tool', 'Generate Remotion code', sceneId);
+    await postJson('/api/scene/codegen', {sceneId, provider: 'openai', repairs: 2, check: true});
+    await waitForCodegen(sceneId);
+    setStage('codegen', 'done', `${sceneId} Remotion code done`);
+
+    setStage('render', 'running', `Rendering preview for ${sceneId}`);
+    pushTrace('tool', 'Render preview', sceneId);
+    await postJson('/api/render', {sceneId});
+    await waitForRender();
+    await refresh();
+    setCacheKey(Date.now());
+    setStage('render', 'done', `${sceneId} preview rendered`);
+    setStage('review', 'paused', `${sceneId} is ready for review`);
+    setDrawer('preview');
+  }, [buildSceneCommitPrompt, persistSceneText, pushTrace, refresh, scenes, selectedScene, setStage, uploadAttachments, waitForCodegen, waitForRender]);
 
   const runAction = useCallback(async (action: AgentAction) => {
     if (generationBusy || mode === 'advice') return;
@@ -435,6 +642,17 @@ export default function AgentStudioApp() {
     try {
       const sceneId = action.sceneId ?? selectedScene?.id ?? selectedId;
       switch (action.type) {
+        case 'rewrite_scene_pipeline':
+          if (!sceneId) throw new Error('缂哄皯 sceneId');
+          if (action.payload?.clearPreview) {
+            await postJson('/api/render/preview/clear', {sceneId});
+          }
+          await runScenePipeline(
+            sceneId,
+            String(action.payload?.scriptText || scriptDraft || selectedScene?.text || ''),
+            String(action.payload?.prompt || action.description || ''),
+          );
+          break;
         case 'run_tts_scene':
           if (!sceneId) throw new Error('缺少 sceneId');
           setStage('tts', 'running', `正在为 ${sceneId} 生成语音。`);
@@ -454,14 +672,15 @@ export default function AgentStudioApp() {
             const scene = scenes.find((item) => item.id === sceneId);
             const configScene = config.scenes.find((item) => item.id === sceneId);
             if (!scene || !configScene) throw new Error(`找不到场景：${sceneId}`);
+            const designPrompt = String(action.payload?.prompt ?? '请生成适合当前文案和时间轴的可执行视觉方案。');
             const result = await postJson<{design: string; provider: string}>('/api/scene/design', {
               sceneId,
               text: configScene.text,
               durationMs: scene.durationMs,
-              prompt: String(action.payload?.prompt ?? '请生成适合当前文案和时间轴的可执行视觉方案。'),
+              prompt: designPrompt,
               currentDesignNotes: configScene.designNotes ?? '',
             });
-            const nextConfig = {...config, scenes: config.scenes.map((item) => item.id === sceneId ? {...item, designNotes: result.design} : item)};
+            const nextConfig = {...config, scenes: config.scenes.map((item) => item.id === sceneId ? {...item, designNotes: result.design, tuningNotes: buildPipelineTuningNotes(sceneId, configScene.text, designPrompt)} : item)};
             await postJson('/api/config', nextConfig);
             setConfig(nextConfig);
           }
@@ -470,7 +689,18 @@ export default function AgentStudioApp() {
         case 'generate_code_scene':
           if (!sceneId) throw new Error('缺少 sceneId');
           setStage('codegen', 'running', '正在生成 Remotion 代码。');
-          if (config) await postJson('/api/config', config);
+          if (config) {
+            const configScene = config.scenes.find((item) => item.id === sceneId);
+            const prompt = String(action.payload?.prompt ?? '').trim();
+            const nextConfig = prompt && configScene
+              ? {
+                ...config,
+                scenes: config.scenes.map((item) => item.id === sceneId ? {...item, tuningNotes: buildPipelineTuningNotes(sceneId, item.text, prompt)} : item),
+              }
+              : config;
+            await postJson('/api/config', nextConfig);
+            setConfig(nextConfig);
+          }
           await postJson('/api/scene/codegen', {sceneId, provider: 'openai', repairs: 2, check: true});
           await waitForCodegen(sceneId);
           setStage('codegen', 'done', 'Remotion 代码已生成。');
@@ -512,12 +742,21 @@ export default function AgentStudioApp() {
     } finally {
       setActionRunning(null);
     }
-  }, [config, generationBusy, mode, pushLog, refresh, scenes, selectedId, selectedScene?.id, setStage, waitForCodegen, waitForRender]);
+  }, [config, generationBusy, mode, pushLog, refresh, runScenePipeline, scenes, scriptDraft, selectedId, selectedScene?.id, selectedScene?.text, setStage, waitForCodegen, waitForRender]);
+
+  useEffect(() => {
+    if (!pendingAutoAction || agentRunning || generationBusy) return;
+    const action = pendingAutoAction;
+    setPendingAutoAction(null);
+    void runAction(action);
+  }, [agentRunning, generationBusy, pendingAutoAction, runAction]);
 
   const submit = () => {
-    const text = input.trim();
+    const text = currentInput.trim();
     if (!text || chatBusy) return;
-    setInput('');
+    if (currentSceneId) {
+      setInputByScene((drafts) => ({...drafts, [currentSceneId]: ''}));
+    }
     askAgent(text);
   };
 
@@ -571,28 +810,36 @@ export default function AgentStudioApp() {
       setStage('asr', 'done', '新字幕时间轴已生成。');
 
       setStage('design', 'running', '正在根据新文案刷新视觉方案。');
+      const designPrompt = '文案已修改，请基于新文案、新语音节奏和现有素材意图刷新视觉方案，避免沿用与新文案冲突的旧节奏。';
       const design = await postJson<{design: string; provider: string}>('/api/scene/design', {
         sceneId,
         text: nextText,
         durationMs: selectedScene.durationMs,
-        prompt: '文案已修改，请基于新文案、新语音节奏和现有素材意图刷新视觉方案，避免沿用与新文案冲突的旧节奏。',
+        prompt: designPrompt,
         currentDesignNotes: latestConfig.scenes.find((scene) => scene.id === sceneId)?.designNotes ?? '',
       });
       const configAfterDesign = await fetchJson<Config>('/api/config');
       const nextConfigAfterDesign = {
         ...configAfterDesign,
         scenes: configAfterDesign.scenes.map((scene) => (
-          scene.id === sceneId ? {...scene, text: nextText, designNotes: design.design} : scene
+          scene.id === sceneId ? {...scene, text: nextText, designNotes: design.design, tuningNotes: buildPipelineTuningNotes(sceneId, nextText, designPrompt)} : scene
         )),
       };
       await postJson('/api/config', nextConfigAfterDesign);
       setConfig(nextConfigAfterDesign);
       setStage('design', 'done', '视觉方案已根据新文案刷新。');
 
+      let codegenWarning = '';
       setStage('codegen', 'running', '正在基于新文案和时间轴重新生成 Remotion 代码。');
-      await postJson('/api/scene/codegen', {sceneId, provider: 'openai', repairs: 2, check: true});
-      await waitForCodegen(sceneId);
-      setStage('codegen', 'done', 'Remotion 代码已重新生成。');
+      try {
+        await postJson('/api/scene/codegen', {sceneId, provider: 'openai', repairs: 2, check: true});
+        await waitForCodegen(sceneId);
+        setStage('codegen', 'done', 'Remotion 代码已重新生成。');
+      } catch (error) {
+        codegenWarning = compactErrorMessage(error);
+        setStage('codegen', 'failed', `代码生成失败，已改用现有场景代码继续渲染：${codegenWarning}`);
+        pushLog(`${sceneId} 代码生成失败，使用现有场景代码继续渲染：${codegenWarning}`);
+      }
 
       setStage('render', 'running', '正在渲染修改后的预览。');
       await postJson('/api/render', {sceneId});
@@ -606,10 +853,12 @@ export default function AgentStudioApp() {
       setMessages((current) => [...current, {
         id: makeId('system'),
         role: 'system',
-        content: `${sceneId} 已按新文案重新生成语音、字幕、画面代码并完成预览渲染。`,
+        content: codegenWarning
+          ? `${sceneId} 已按新文案重新生成语音和字幕，并使用现有场景代码完成预览渲染。代码生成暂未完成：${codegenWarning}`
+          : `${sceneId} 已按新文案重新生成语音、字幕、画面代码并完成预览渲染。`,
       }]);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = compactErrorMessage(error);
       setStage('review', 'failed', message);
       setMessages((current) => [...current, {id: makeId('system'), role: 'system', content: `文案修改流程失败：${message}`}]);
       pushLog(`文案修改流程失败：${message}`);
@@ -683,18 +932,25 @@ export default function AgentStudioApp() {
         const nextConfigAfterDesign = {
           ...configAfterDesign,
           scenes: configAfterDesign.scenes.map((scene) => (
-            scene.id === sceneId ? {...scene, text: nextText, designNotes: design.design} : scene
+            scene.id === sceneId ? {...scene, text: nextText, designNotes: design.design, tuningNotes: buildPipelineTuningNotes(sceneId, nextText, designPrompt)} : scene
           )),
         };
         await postJson('/api/config', nextConfigAfterDesign);
         setConfig(nextConfigAfterDesign);
         setStage('design', 'done', '视觉方案已保存。');
 
+        let codegenWarning = '';
         setBackgroundJob({sceneId, phase: '生成代码'});
         setStage('codegen', 'running', `正在生成并校验 ${sceneId} Remotion 代码。`);
-        await postJson('/api/scene/codegen', {sceneId, provider: 'openai', repairs: 2, check: true});
-        await waitForCodegen(sceneId);
-        setStage('codegen', 'done', 'Remotion 代码已生成。');
+        try {
+          await postJson('/api/scene/codegen', {sceneId, provider: 'openai', repairs: 2, check: true});
+          await waitForCodegen(sceneId);
+          setStage('codegen', 'done', 'Remotion 代码已生成。');
+        } catch (error) {
+          codegenWarning = compactErrorMessage(error);
+          setStage('codegen', 'failed', `代码生成失败，已改用现有场景代码继续渲染：${codegenWarning}`);
+          pushLog(`${sceneId} 代码生成失败，使用现有场景代码继续渲染：${codegenWarning}`);
+        }
 
         setBackgroundJob({sceneId, phase: '渲染预览'});
         setStage('render', 'running', `正在渲染 ${sceneId} 单段预览。`);
@@ -707,11 +963,13 @@ export default function AgentStudioApp() {
         setMessages((current) => [...current, {
           id: makeId('system'),
           role: 'system',
-          content: `${sceneId} 后台生成完成。你可以打开预览抽屉验收，当前对话可以继续推进下一段。`,
+          content: codegenWarning
+            ? `${sceneId} 后台生成已用现有场景代码完成预览。代码生成暂未完成：${codegenWarning}`
+            : `${sceneId} 后台生成完成。你可以打开预览抽屉验收，当前对话可以继续推进下一段。`,
         }]);
         pushLog(`${sceneId} 后台生成完成`);
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = compactErrorMessage(error);
         setStage('review', 'failed', message);
         setMessages((current) => [...current, {id: makeId('system'), role: 'system', content: `${sceneId} 后台生成失败：${message}`}]);
         pushLog(`${sceneId} 后台生成失败：${message}`);
@@ -742,11 +1000,61 @@ export default function AgentStudioApp() {
     }
   }, [scenes, scriptDraft, selectedScene, startSceneBackgroundGenerate]);
 
+  const interruptAgent = useCallback(() => {
+    const hadWork = Boolean(agentAbortRef.current || agentRunning || pendingAutoAction);
+    abortRequestedRef.current = true;
+    agentAbortRef.current?.abort();
+    agentAbortRef.current = null;
+    lastThinkingTraceAtRef.current = 0;
+    setPendingAutoAction(null);
+    setAgentActions([]);
+    if (hadWork) {
+      setAgentRunning(false);
+      setStage('understanding', 'paused', '已中断当前 Agent 响应，待执行动作已清空。');
+      pushTrace('error', 'Agent interrupted', 'Stopped current response and cleared pending actions');
+      pushLog('Agent 已中断，待执行动作已清空');
+    }
+  }, [agentRunning, pendingAutoAction, pushLog, pushTrace, setStage]);
+
+  const clearAgentContext = useCallback(() => {
+    abortRequestedRef.current = true;
+    agentAbortRef.current?.abort();
+    agentAbortRef.current = null;
+    lastThinkingTraceAtRef.current = 0;
+    setAgentRunning(false);
+    setPendingAutoAction(null);
+    setAgentActions([]);
+    setAgentTrace([]);
+    setLogs([]);
+    setAttachments([]);
+    setInputByScene({});
+    setStages(cloneStages());
+    setScriptDraft(selectedScene?.text ?? '');
+    setMessages([{
+      id: makeId('system'),
+      role: 'system',
+      content: '上下文已清理。项目文件、已生成音频、字幕和预览不会被删除；继续输入即可。',
+    }]);
+  }, [selectedScene?.text]);
+
   return (
-    <div style={shellStyle}>
+    <div style={shellStyle(Boolean(drawer))}>
       <div style={topBarStyle}>
         <strong>Agent Studio</strong>
-        <span>{MODE_META[mode].label} · {runState}</span>
+        <div style={topBarActionsStyle}>
+          <span>{MODE_META[mode].label} · {runState}</span>
+          <button
+            type="button"
+            style={topBarButtonStyle(!agentRunning && !pendingAutoAction, 'danger')}
+            disabled={!agentRunning && !pendingAutoAction}
+            onClick={interruptAgent}
+          >
+            中断
+          </button>
+          <button type="button" style={topBarButtonStyle(false)} onClick={clearAgentContext}>
+            清理上下文
+          </button>
+        </div>
       </div>
 
       <main style={chatStageStyle}>
@@ -764,7 +1072,7 @@ export default function AgentStudioApp() {
           onCommitSelected={commitSelectedScene}
         />
 
-        <section style={threadStyle}>
+        <section ref={threadRef} style={threadStyle}>
           {messages.map((message) => (
             <article key={message.id} style={messageStyle(message.role)}>
               <div style={messageLabelStyle}>{message.role === 'user' ? '你' : message.role === 'agent' ? 'Agent' : '系统'}</div>
@@ -772,6 +1080,29 @@ export default function AgentStudioApp() {
             </article>
           ))}
           {agentRunning ? <div style={thinkingStyle}>Agent 正在分析上下文、素材意图和制作路径...</div> : null}
+          {showActivity ? (
+            <section style={activityCardStyle}>
+              <div style={activitySummaryStyle}>
+                <span style={activityIconStyle}>✎</span>
+                <span>{generationBusy || agentRunning ? '正在编辑' : '已更改'} {activityFiles.length} 个文件，已运行 {activityCommandCount} 条命令</span>
+                <span style={activityChevronStyle}>›</span>
+              </div>
+              {activityFiles.map((item) => (
+                <div key={item.file} style={activityFileRowStyle}>
+                  <span style={activityMutedStyle}>正在编辑</span>
+                  <strong style={activityFileNameStyle}>{fileBaseName(item.file)}</strong>
+                  <span style={activityAddStyle}>+{item.additions}</span>
+                  <span style={activityDelStyle}>-{item.deletions}</span>
+                </div>
+              ))}
+              {agentTrace.slice(-6).map((trace) => (
+                <div key={trace.id} style={activityTraceStyle(trace.kind)}>
+                  <span>{trace.title}</span>
+                  {trace.detail ? <small>{trace.detail}</small> : null}
+                </div>
+              ))}
+            </section>
+          ) : null}
         </section>
 
         {mode === 'review' && agentActions.length ? (
@@ -801,7 +1132,35 @@ export default function AgentStudioApp() {
               {label}
             </button>
           ))}
+          <button type="button" style={drawerButtonStyle(scriptEditOpen)} onClick={() => setScriptEditOpen((open) => !open)}>
+            文案修改
+          </button>
         </section>
+
+        {scriptEditOpen ? (
+          <section style={mainScriptEditorStyle}>
+            <div style={scriptEditorHeaderStyle}>
+              <div>
+                <strong>{selectedScene?.id ?? '当前段'} 口播文案</strong>
+                <p>这里会真实写入当前 scene 的文案；选择重制会强制重跑 TTS、ASR、Remotion 代码和预览。</p>
+              </div>
+            </div>
+            <textarea
+              value={scriptDraft}
+              onChange={(event) => setScriptDraft(event.target.value)}
+              style={scriptTextareaStyle}
+              disabled={generationBusy}
+            />
+            <div style={reviewActionsStyle}>
+              <button type="button" style={smallActionStyle(actionRunning === 'script-save')} disabled={generationBusy} onClick={() => saveScriptDraft({regenerate: false})}>
+                保存文案
+              </button>
+              <button type="button" style={smallActionStyle(actionRunning === 'script-regenerate')} disabled={generationBusy} onClick={() => saveScriptDraft({regenerate: true})}>
+                保存并重制本段
+              </button>
+            </div>
+          </section>
+        ) : null}
 
         <section style={composerShellStyle}>
           <div style={modeRowStyle}>
@@ -818,8 +1177,11 @@ export default function AgentStudioApp() {
             ))}
           </div>
           <textarea
-            value={input}
-            onChange={(event) => setInput(event.target.value)}
+            value={currentInput}
+            onChange={(event) => {
+              if (!currentSceneId) return;
+              setInputByScene((drafts) => ({...drafts, [currentSceneId]: event.target.value}));
+            }}
             placeholder={`${selectedScene?.id ?? '当前段'}：写修改意见、素材用途，或用 @alias 指定素材。`}
             style={inputStyle}
             disabled={chatBusy}
@@ -828,12 +1190,25 @@ export default function AgentStudioApp() {
             }}
           />
           <div style={composerFooterStyle}>
-            <label style={fileButtonStyle}>
-              +
+            <label
+              style={fileButtonStyle}
+              role="button"
+              tabIndex={0}
+              aria-label="添加素材"
+              title="添加素材"
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  event.currentTarget.querySelector('input')?.click();
+                }
+              }}
+            >
+              <span style={fileButtonIconStyle}>+</span>
+              <span style={fileButtonTextStyle}>素材</span>
               <input type="file" multiple accept={MEDIA_ACCEPT} style={{display: 'none'}} onChange={(event) => addAttachments(event.target.files)} />
             </label>
             <span style={modeHintStyle}>{MODE_META[mode].desc}</span>
-            <button type="button" style={sendButtonStyle(!input.trim() || chatBusy)} disabled={!input.trim() || chatBusy} onClick={submit}>
+            <button type="button" style={sendButtonStyle(!currentInput.trim() || chatBusy)} disabled={!currentInput.trim() || chatBusy} onClick={submit}>
               {chatBusy ? '分析中' : '发送'}
             </button>
           </div>
@@ -907,7 +1282,12 @@ export default function AgentStudioApp() {
                   })}
                   onOpenTune={() => {
                     setDrawer(null);
-                    setInput(selectedScene ? `请根据当前 ${selectedScene.id} 预览效果，帮我微调画面、字幕和节奏。` : '请帮我微调当前预览。');
+                    if (selectedScene) {
+                      setInputByScene((drafts) => ({
+                        ...drafts,
+                        [selectedScene.id]: `请根据当前 ${selectedScene.id} 预览效果，帮我微调画面、字幕和节奏。`,
+                      }));
+                    }
                   }}
                 />
                 <div style={reviewActionsStyle}>
@@ -930,7 +1310,11 @@ export default function AgentStudioApp() {
               />
             ) : null}
             {drawer === 'logs' ? (
-              <div style={logBoxStyle}>{logs.slice(-120).map((line, index) => <div key={`${index}-${line}`}>{line}</div>)}</div>
+              logs.length ? (
+                <div style={logBoxStyle}>{logs.slice(-120).map((line, index) => <div key={`${index}-${line}`}>{line}</div>)}</div>
+              ) : (
+                <div style={emptyPanelStyle}>暂无运行日志。发送消息、生成语音、渲染预览后会显示在这里。</div>
+              )
             ) : null}
           </div>
         </aside>
@@ -939,24 +1323,59 @@ export default function AgentStudioApp() {
   );
 }
 
-const shellStyle: React.CSSProperties = {height: '100vh', overflow: 'hidden', background: '#111', color: '#f2f2f2', fontFamily: 'Inter, Segoe UI, Arial, sans-serif', position: 'relative'};
-const topBarStyle: React.CSSProperties = {height: 38, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 18px', borderBottom: '1px solid rgba(255,255,255,0.08)', color: '#b9b9b9', fontSize: 12};
-const chatStageStyle: React.CSSProperties = {height: 'calc(100vh - 38px)', maxWidth: 980, margin: '0 auto', display: 'grid', gridTemplateRows: 'auto minmax(0, 1fr) auto auto auto', gap: 12, padding: '18px 22px'};
-const threadStyle: React.CSSProperties = {overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 18, padding: '6px 0 18px'};
+const shellStyle = (drawerOpen: boolean): React.CSSProperties => ({
+  height: '100vh',
+  overflow: 'hidden',
+  background: '#111',
+  color: '#f2f2f2',
+  fontFamily: 'Inter, Segoe UI, Arial, sans-serif',
+  display: 'grid',
+  gridTemplateRows: '38px minmax(0, 1fr)',
+  gridTemplateColumns: drawerOpen ? 'minmax(0, 1fr) minmax(360px, 42vw)' : 'minmax(0, 1fr)',
+});
+const topBarStyle: React.CSSProperties = {gridColumn: '1 / -1', height: 38, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 18px', borderBottom: '1px solid rgba(255,255,255,0.08)', color: '#b9b9b9', fontSize: 12};
+const topBarActionsStyle: React.CSSProperties = {display: 'flex', alignItems: 'center', gap: 8};
+const topBarButtonStyle = (disabled: boolean, tone: 'neutral' | 'danger' = 'neutral'): React.CSSProperties => ({
+  border: tone === 'danger' ? '1px solid rgba(255,107,107,0.35)' : '1px solid rgba(255,255,255,0.14)',
+  background: disabled ? 'rgba(255,255,255,0.03)' : tone === 'danger' ? 'rgba(255,107,107,0.14)' : 'rgba(255,255,255,0.07)',
+  color: disabled ? '#686868' : tone === 'danger' ? '#ffb3b3' : '#dddddd',
+  borderRadius: 6,
+  padding: '5px 9px',
+  cursor: disabled ? 'not-allowed' : 'pointer',
+  fontSize: 12,
+});
+const chatStageStyle: React.CSSProperties = {minHeight: 0, height: '100%', width: '100%', maxWidth: 1080, margin: '0 auto', display: 'grid', gridTemplateRows: 'auto minmax(0, 1fr) auto auto auto', gap: 12, padding: '18px 22px', boxSizing: 'border-box'};
+const threadStyle: React.CSSProperties = {minHeight: 0, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 18, padding: '6px 0 18px', scrollBehavior: 'smooth'};
 const messageStyle = (role: AgentMessage['role']): React.CSSProperties => ({display: 'grid', justifyItems: role === 'user' ? 'end' : 'start', gap: 6});
 const messageLabelStyle: React.CSSProperties = {fontSize: 12, color: '#8c8c8c'};
 const bubbleStyle = (role: AgentMessage['role']): React.CSSProperties => ({
-  maxWidth: role === 'user' ? '78%' : '86%',
+  maxWidth: role === 'user' ? '78%' : '100%',
   whiteSpace: 'pre-wrap',
   color: '#ededed',
-  background: role === 'user' ? '#2d2d2d' : 'transparent',
-  border: role === 'user' ? '1px solid rgba(255,255,255,0.08)' : 'none',
+  background: role === 'user' ? '#2d2d2d' : role === 'agent' ? '#182022' : '#181818',
+  border: role === 'user' ? '1px solid rgba(255,255,255,0.08)' : role === 'agent' ? '1px solid rgba(46,196,182,0.20)' : '1px solid rgba(255,255,255,0.08)',
   borderRadius: 14,
-  padding: role === 'user' ? '12px 14px' : 0,
+  padding: '12px 14px',
   lineHeight: 1.72,
   fontSize: 15,
 });
 const thinkingStyle: React.CSSProperties = {color: '#8c8c8c', fontSize: 13};
+const activityCardStyle: React.CSSProperties = {display: 'grid', gap: 8, alignSelf: 'stretch', border: '1px solid rgba(255,255,255,0.10)', background: '#181818', borderRadius: 18, padding: '12px 14px', color: '#d8d8d8'};
+const activitySummaryStyle: React.CSSProperties = {display: 'flex', alignItems: 'center', gap: 10, color: '#a7a7a7', fontSize: 18, fontWeight: 700};
+const activityIconStyle: React.CSSProperties = {fontSize: 21, color: '#9a9a9a'};
+const activityChevronStyle: React.CSSProperties = {marginLeft: 'auto', color: '#8d8d8d'};
+const activityFileRowStyle: React.CSSProperties = {display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 31, fontSize: 15};
+const activityMutedStyle: React.CSSProperties = {color: '#8b8b8b'};
+const activityFileNameStyle: React.CSSProperties = {color: '#82c4ff', fontWeight: 700};
+const activityAddStyle: React.CSSProperties = {color: '#39d98a', fontWeight: 800};
+const activityDelStyle: React.CSSProperties = {color: '#ff6666', fontWeight: 800};
+const activityTraceStyle = (kind: AgentTrace['kind']): React.CSSProperties => ({
+  display: 'grid',
+  gap: 2,
+  paddingLeft: 31,
+  color: kind === 'error' ? '#ff8b8b' : kind === 'done' ? '#79e2b6' : kind === 'file' ? '#82c4ff' : '#b9b9b9',
+  fontSize: 12,
+});
 const reviewCardStyle: React.CSSProperties = {display: 'grid', gap: 10, border: '1px solid rgba(255,255,255,0.10)', background: '#1a1a1a', borderRadius: 14, padding: 12};
 const actionPillRowStyle: React.CSSProperties = {display: 'flex', gap: 8, flexWrap: 'wrap'};
 const smallActionStyle = (active: boolean): React.CSSProperties => ({border: '1px solid rgba(255,255,255,0.13)', background: active ? '#303030' : '#222', color: '#ededed', borderRadius: 999, padding: '8px 12px', cursor: active ? 'wait' : 'pointer', fontWeight: 700});
@@ -967,17 +1386,20 @@ const modeRowStyle: React.CSSProperties = {display: 'flex', gap: 6, marginBottom
 const modeButtonStyle = (active: boolean): React.CSSProperties => ({border: '1px solid rgba(255,255,255,0.10)', background: active ? '#404040' : '#242424', color: active ? '#fff' : '#bdbdbd', borderRadius: 999, padding: '6px 10px', cursor: 'pointer', fontSize: 12});
 const inputStyle: React.CSSProperties = {width: '100%', minHeight: 92, boxSizing: 'border-box', resize: 'vertical', border: 0, outline: 'none', background: 'transparent', color: '#f2f2f2', padding: '6px 4px', lineHeight: 1.6, fontSize: 15};
 const composerFooterStyle: React.CSSProperties = {display: 'flex', alignItems: 'center', gap: 10};
-const fileButtonStyle: React.CSSProperties = {width: 30, height: 30, borderRadius: 999, display: 'grid', placeItems: 'center', background: '#3b3b3b', color: '#ddd', cursor: 'pointer', fontSize: 22};
+const fileButtonStyle: React.CSSProperties = {height: 30, borderRadius: 999, display: 'inline-flex', alignItems: 'center', gap: 5, background: '#3b3b3b', color: '#ddd', cursor: 'pointer', padding: '0 11px 0 9px', fontSize: 12, fontWeight: 800, outline: 'none'};
+const fileButtonIconStyle: React.CSSProperties = {fontSize: 20, lineHeight: 1, transform: 'translateY(-1px)'};
+const fileButtonTextStyle: React.CSSProperties = {lineHeight: 1};
 const modeHintStyle: React.CSSProperties = {flex: 1, color: '#a8a8a8', fontSize: 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'};
 const sendButtonStyle = (disabled: boolean): React.CSSProperties => ({border: 0, background: disabled ? '#555' : '#f2f2f2', color: disabled ? '#aaa' : '#111', borderRadius: 999, padding: '9px 15px', fontWeight: 900, cursor: disabled ? 'not-allowed' : 'pointer'});
-const drawerStyle: React.CSSProperties = {position: 'fixed', right: 18, top: 56, bottom: 18, width: 'min(560px, calc(100vw - 36px))', background: '#171717', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 18, boxShadow: '0 24px 90px rgba(0,0,0,0.55)', display: 'grid', gridTemplateRows: 'auto 1fr', zIndex: 10, overflow: 'hidden'};
+const drawerStyle: React.CSSProperties = {minHeight: 0, alignSelf: 'stretch', margin: '18px 18px 18px 0', background: '#171717', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 18, boxShadow: '0 24px 90px rgba(0,0,0,0.38)', display: 'grid', gridTemplateRows: 'auto 1fr', overflow: 'hidden'};
 const drawerHeaderStyle: React.CSSProperties = {display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '13px 14px', borderBottom: '1px solid rgba(255,255,255,0.08)'};
 const drawerCloseStyle: React.CSSProperties = {border: '1px solid rgba(255,255,255,0.12)', background: '#222', color: '#ddd', borderRadius: 8, padding: '6px 9px', cursor: 'pointer'};
-const drawerBodyStyle: React.CSSProperties = {overflow: 'auto'};
+const drawerBodyStyle: React.CSSProperties = {minHeight: 0, overflow: 'auto'};
 const scriptEditorStyle = (open: boolean): React.CSSProperties => ({
   borderBottom: '1px solid rgba(255,255,255,0.08)',
   background: open ? '#1f1f1f' : '#181818',
 });
+const mainScriptEditorStyle: React.CSSProperties = {display: 'grid', gap: 8, border: '1px solid rgba(255,255,255,0.12)', background: '#1c1c1c', borderRadius: 14, padding: 12};
 const scriptEditorHeaderStyle: React.CSSProperties = {
   display: 'flex',
   justifyContent: 'space-between',
@@ -1004,3 +1426,4 @@ const stageItemStyle: React.CSSProperties = {display: 'grid', gridTemplateColumn
 const stageDotStyle = (status: AgentStageStatus): React.CSSProperties => ({width: 10, height: 10, borderRadius: 999, marginTop: 5, background: stageColor[status], boxShadow: status === 'running' ? `0 0 14px ${stageColor[status]}` : 'none'});
 const reviewActionsStyle: React.CSSProperties = {display: 'flex', gap: 8, padding: 12, borderTop: '1px solid rgba(255,255,255,0.08)'};
 const logBoxStyle: React.CSSProperties = {padding: 14, whiteSpace: 'pre-wrap', fontFamily: 'Consolas, monospace', fontSize: 12, color: '#bdbdbd', lineHeight: 1.6};
+const emptyPanelStyle: React.CSSProperties = {minHeight: 180, display: 'grid', placeItems: 'center', padding: 20, color: '#8c8c8c', textAlign: 'center', fontSize: 13};

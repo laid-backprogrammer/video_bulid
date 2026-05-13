@@ -35,6 +35,12 @@ const fenced = (label, lang, content) => [
   '',
 ].join('\n');
 
+const compactText = (text = '', maxChars = 1400) => {
+  const value = String(text || '').replace(/\n{3,}/g, '\n\n').trim();
+  if (value.length <= maxChars) return value || '(none)';
+  return `${value.slice(0, maxChars).trimEnd()}\n\n[truncated ${value.length - maxChars} chars]`;
+};
+
 const summarizeCues = (cues = []) => cues.map((cue) => ({
   id: cue.id,
   text: cue.text,
@@ -401,21 +407,21 @@ export async function buildSceneCodegenContext(sceneId, {skillSelection: provide
     'Important TypeScript style rule: if a style object is stored in a variable, annotate it as React.CSSProperties so CSS literal fields such as textAlign and position keep valid narrow types.',
     '',
     fenced('Scene Narration (Primary)', 'text', scene.text || '(empty)'),
-    fenced('Fine-tuning Notes (Highest Priority User Overrides)', 'md', scene.tuningNotes || 'No tuning notes provided.'),
-    fenced('Visual Design Brief (Base Brief, Superseded By Tuning Notes)', 'md', scene.designNotes || 'No design notes provided.'),
+    fenced('Fine-tuning Notes (Highest Priority User Overrides)', 'md', compactText(scene.tuningNotes || 'No tuning notes provided.', 1000)),
+    fenced('Visual Design Brief (Base Brief, Superseded By Tuning Notes)', 'md', compactText(scene.designNotes || 'No design notes provided.', 1200)),
     fenced('User Media Assets and Visual References (Primary)', 'md', buildSceneAssetsMarkdown(sceneAssets, {root: ROOT, mentionText: assetMentionText, requireMention: true})),
     fenced('Media Asset Requirement (Hard)', 'json', JSON.stringify(context.mediaAssetRequirement, null, 2)),
-    fenced('Timestamped Subtitle Timeline (Primary)', 'md', cueTimelineMarkdown),
-    fenced('Project Visual Style (Soft Guide)', 'md', styleGuideMarkdown(styleGuide)),
+    fenced('Timestamped Subtitle Timeline (Primary)', 'md', compactText(cueTimelineMarkdown, 1800)),
+    fenced('Project Visual Style (Soft Guide)', 'md', compactText(styleGuideMarkdown(styleGuide), 700)),
     fenced('Skill Selection Trace', 'md', skillSelectionMarkdown(skillSelection)),
     fenced('Agent Tool Boundaries', 'md', agentToolsMarkdown({allowedWriteFiles, validationCommands})),
-    fenced('Task JSON', 'json', JSON.stringify(context, null, 2)),
-    fenced('Generated Scene Contract', 'md', await readText('src/scenes/generated/CONTRACT.md')),
-    fenced('Types', 'ts', await readText('src/types.ts')),
-    fenced('useSceneProgress Hook', 'ts', await readText('src/hooks/useSceneProgress.ts')),
-    fenced('Caption Overlay Reference', 'tsx', await readText('src/components/Captions.tsx')),
-    fenced('Background Components Reference', 'tsx', await readText('src/components/Background.tsx')),
-    ...await Promise.all(skillSelection.selectedRuleFiles.map(async (file) => fenced(`Rule: ${file}`, file.endsWith('.md') ? 'md' : 'tsx', await readText(file)))),
+    fenced('Task JSON', 'json', compactText(JSON.stringify(context, null, 2), 3200)),
+    fenced('Generated Scene Contract', 'md', compactText(await readText('src/scenes/generated/CONTRACT.md'), 1600)),
+    fenced('Types', 'ts', compactText(await readText('src/types.ts'), 1400)),
+    fenced('useSceneProgress Hook', 'ts', compactText(await readText('src/hooks/useSceneProgress.ts'), 1200)),
+    fenced('Caption Overlay Reference', 'tsx', compactText(await readText('src/components/Captions.tsx'), 900)),
+    fenced('Background Components Reference', 'tsx', compactText(await readText('src/components/Background.tsx'), 900)),
+    ...await Promise.all(skillSelection.selectedRuleFiles.slice(0, 2).map(async (file) => fenced(`Rule: ${file}`, file.endsWith('.md') ? 'md' : 'tsx', compactText(await readText(file), 1200)))),
   ];
 
   return {

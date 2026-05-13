@@ -12,7 +12,9 @@
     "editor": "npm run editor:build && npm run editor:serve",
     "scene:context": "node src/composer/scene-codegen-context.mjs",
     "scene:agent": "node src/composer/scene-agent.mjs",
-    "scene:check": "npx tsc --noEmit && npm run editor:build"
+    "scene:check": "npx tsc --noEmit && npm run editor:build",
+    "video:agent": "python agents/video_agent/video_agent.py",
+    "video:agent:selftest": "python agents/video_agent/video_agent.py --self-test"
   },
   "dependencies": {
     "@remotion/captions": "^4.0.451",

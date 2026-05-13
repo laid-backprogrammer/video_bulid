@@ -150,12 +150,14 @@ async function buildContext(sceneId, {onLog, skillSelection = null} = {}) {
 async function getLlmSettings(modelOverride) {
   const script = await readJsonFile(SCRIPT_PATH).catch(() => ({}));
   const apiKey = process.env.SCENE_AGENT_API_KEY
+    || process.env.MOONSHOT_API_KEY
     || script.llmApiKey
     || script.transcribeApiKey
     || process.env.OPENAI_API_KEY
     || null;
   let baseUrl = (
     process.env.SCENE_AGENT_BASE_URL
+    || process.env.MOONSHOT_BASE_URL
     || process.env.OPENAI_BASE_URL
     || script.llmBaseUrl
     || script.transcribeBaseUrl
@@ -166,8 +168,71 @@ async function getLlmSettings(modelOverride) {
   return {
     apiKey,
     baseUrl,
-    model: modelOverride || script.llmModel || process.env.OPENAI_MODEL || 'gpt-4o-mini',
+    model: modelOverride || process.env.MOONSHOT_MODEL || script.llmModel || process.env.OPENAI_MODEL || 'gpt-4o-mini',
   };
+}
+
+function llmTemperature(model, requested = 0.4) {
+  return /^kimi-k2\.6(?:$|[-_:.])/i.test(String(model || '')) ? 1 : requested;
+}
+
+function isKimiK26(model) {
+  return /^kimi-k2\.6(?:$|[-_:.])/i.test(String(model || ''));
+}
+
+function buildChatRequestBody(settings, messages, {temperature = 0.4, maxTokens = 32768, responseFormatJson = false} = {}) {
+  const body = {
+    model: settings.model,
+    messages,
+    temperature: llmTemperature(settings.model, temperature),
+  };
+  if (responseFormatJson) {
+    body.response_format = {type: 'json_object'};
+  }
+  if (isKimiK26(settings.model)) {
+    return {
+      ...body,
+      temperature: 1,
+      max_tokens: maxTokens,
+      top_p: 0.95,
+      stream: true,
+      thinking: {type: 'enabled'},
+    };
+  }
+  return body;
+}
+
+async function readStreamingChatText(response) {
+  if (!response.body) throw new Error('LLM response has no stream body');
+  const decoder = new TextDecoder();
+  const reader = response.body.getReader();
+  let buffer = '';
+  let text = '';
+
+  const consumeLine = (line) => {
+    if (!line.startsWith('data:')) return false;
+    const payload = line.slice(5).trim();
+    if (!payload) return false;
+    if (payload === '[DONE]') return true;
+    const data = JSON.parse(payload);
+    const choice = data.choices?.[0] ?? {};
+    const delta = choice.delta ?? choice.message ?? {};
+    text += delta.content ?? '';
+    return false;
+  };
+
+  while (true) {
+    const {done, value} = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, {stream: true});
+    const lines = buffer.split(/\r?\n/);
+    buffer = lines.pop() ?? '';
+    for (const line of lines) {
+      if (consumeLine(line)) return text;
+    }
+  }
+  if (buffer.trim()) consumeLine(buffer.trim());
+  return text;
 }
 
 async function getCodegenSettings(options = {}) {
@@ -184,26 +249,36 @@ async function getCodegenSettings(options = {}) {
   return {provider};
 }
 
-async function chat(messages, {model, temperature = 0.4} = {}) {
+async function chat(messages, {model, temperature = 0.4, onLog = null, label = 'LLM request', responseFormatJson = false} = {}) {
   const settings = await getLlmSettings(model);
   if (!settings.apiKey) {
     throw new Error('Missing LLM API key. Set SCENE_AGENT_API_KEY, script.llmApiKey, script.transcribeApiKey, or OPENAI_API_KEY.');
   }
 
-  const response = await fetch(`${settings.baseUrl}/v1/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${settings.apiKey}`,
-    },
-    body: JSON.stringify({
-      model: settings.model,
-      messages,
-      temperature,
-    }),
-  });
+  let waitSeconds = 0;
+  const waitTimer = onLog ? setInterval(() => {
+    waitSeconds += 10;
+    logLine(onLog, `[scene-agent] ${label} still running (${waitSeconds}s)`);
+  }, 10000) : null;
 
-  const text = await response.text();
+  let response;
+  try {
+    const requestBody = buildChatRequestBody(settings, messages, {temperature, responseFormatJson});
+    response = await fetch(`${settings.baseUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${settings.apiKey}`,
+      },
+      body: JSON.stringify(requestBody),
+    });
+  } finally {
+    if (waitTimer) clearInterval(waitTimer);
+  }
+
+  const text = response.ok && isKimiK26(settings.model)
+    ? await readStreamingChatText(response)
+    : await response.text();
   let data = null;
   try {
     data = text ? JSON.parse(text) : null;
@@ -214,7 +289,7 @@ async function chat(messages, {model, temperature = 0.4} = {}) {
     throw new Error(`LLM request failed (model=${settings.model}): ${message}`);
   }
 
-  const content = data?.choices?.[0]?.message?.content || '';
+  const content = isKimiK26(settings.model) ? text : data?.choices?.[0]?.message?.content || '';
   if (!content.trim()) throw new Error('LLM returned an empty response');
   return content;
 }
@@ -540,7 +615,7 @@ async function selectSkillsWithMainAgent(selectionContext, {model, provider, onL
         role: 'user',
         content: makeSkillSelectorUserPrompt(selectionContext.markdown),
       },
-    ], {model, temperature: 0.1});
+    ], {model, temperature: 0.1, onLog, label: 'Skill selection', responseFormatJson: true});
     const parsed = parseJsonObject(response);
     const selection = normalizeSkillSelection({
       selectedRuleFiles: parsed.selectedRuleFiles,
@@ -556,26 +631,26 @@ async function selectSkillsWithMainAgent(selectionContext, {model, provider, onL
   }
 }
 
-async function planSceneBlueprint(contextMarkdown, {model}) {
+async function planSceneBlueprint(contextMarkdown, {model, onLog}) {
   return chat([
     {role: 'system', content: makeVisualDirectorSystemPrompt()},
     {role: 'user', content: makeVisualDirectorUserPrompt(contextMarkdown)},
-  ], {model, temperature: 0.2});
+  ], {model, temperature: 0.2, onLog, label: 'Visual planning'});
 }
 
-async function generateScene(contextMarkdown, blueprint, {model}) {
+async function generateScene(contextMarkdown, blueprint, {model, onLog}) {
   const response = await chat([
     {role: 'system', content: makeCodeWriterSystemPrompt()},
     {role: 'user', content: makeCodeWriterUserPrompt(contextMarkdown, blueprint)},
-  ], {model, temperature: 0.4});
+  ], {model, temperature: 0.4, onLog, label: 'Code generation'});
   return extractCode(response);
 }
 
-async function repairScene(repairContextMarkdown, code, {model}) {
+async function repairScene(repairContextMarkdown, code, {model, onLog}) {
   const response = await chat([
     {role: 'system', content: makeCodeWriterSystemPrompt()},
     {role: 'user', content: makeRepairUserPrompt({repairContextMarkdown, code})},
-  ], {model, temperature: 0.2});
+  ], {model, temperature: 0.2, onLog, label: 'Code repair'});
   return extractCode(response);
 }
 
@@ -628,7 +703,7 @@ export async function runSceneAgent(options = {}) {
   let blueprint = buildSubagentFallbackBlueprint(json);
   if (codegenSettings.provider === 'openai') {
     logLine(args.onLog, `[scene-agent] Planning brief for ${args.sceneId}`);
-    blueprint = await planSceneBlueprint(markdown, {model: args.model});
+    blueprint = await planSceneBlueprint(markdown, {model: args.model, onLog: args.onLog});
     if (looksLikeMojibake(blueprint)) {
       logLine(args.onLog, '[scene-agent] Planning brief contained mojibake; using local context fallback blueprint');
       blueprint = buildSubagentFallbackBlueprint(json);
@@ -641,7 +716,7 @@ export async function runSceneAgent(options = {}) {
   await fs.writeFile(blueprintPath, blueprint.trimEnd() + '\n', 'utf-8');
   logLine(args.onLog, `Wrote ${path.relative(ROOT, blueprintPath)}`);
 
-  let code = await generateScene(markdown, blueprint, {model: args.model});
+  let code = await generateScene(markdown, blueprint, {model: args.model, onLog: args.onLog});
 
   try {
     for (let attempt = 0; attempt <= args.repairs; attempt += 1) {
@@ -678,7 +753,7 @@ export async function runSceneAgent(options = {}) {
           blueprint,
           validationError: message,
         });
-        code = await repairScene(repairContextMarkdown, code, {model: args.model});
+        code = await repairScene(repairContextMarkdown, code, {model: args.model, onLog: args.onLog});
       }
     }
   } catch (error) {

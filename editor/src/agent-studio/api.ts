@@ -25,11 +25,17 @@ export const postJson = <T,>(url: string, body: unknown = {}) =>
     body: JSON.stringify(body),
   });
 
-export const postSse = async (url: string, body: unknown, handlers: SseHandlers) => {
+export const postSse = async (
+  url: string,
+  body: unknown,
+  handlers: SseHandlers,
+  options: {signal?: AbortSignal} = {},
+) => {
   const res = await fetch(url, {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(body),
+    signal: options.signal,
   });
 
   if (!res.ok) {
@@ -79,5 +85,6 @@ export const postSse = async (url: string, body: unknown, handlers: SseHandlers)
     if (buffer.startsWith('data:')) dataLines.push(buffer.slice(5).trimStart());
     dispatch();
   }
+  if (dataLines.length) dispatch();
 };
 

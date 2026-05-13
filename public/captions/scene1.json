@@ -1,46 +1,51 @@
 {
   "id": "scene1",
-  "text": "这是这个账号的第一条视频。",
-  "audioFile": "public/voiceover/scene1.1777538519693.wav",
-  "durationInFrames": 73,
+  "text": "我来为大家介绍 Claude 和 Codex",
+  "audioFile": "public/voiceover/scene1.1778607375257.mp3",
+  "durationInFrames": 106,
   "cues": [
     {
       "id": "cue-1",
       "startFrame": 0,
-      "endFrame": 73,
-      "text": "这是这个账号的第一条视频",
+      "endFrame": 106,
+      "text": "我来为大家介绍 Claude 和 Codex",
       "words": [
         {
-          "text": "这是",
+          "text": "我来",
           "startFrame": 0,
-          "endFrame": 14
+          "endFrame": 17
         },
         {
-          "text": "这个",
-          "startFrame": 14,
-          "endFrame": 29
+          "text": "为大",
+          "startFrame": 17,
+          "endFrame": 35
         },
         {
-          "text": "账号",
-          "startFrame": 29,
-          "endFrame": 43
+          "text": "家介绍",
+          "startFrame": 35,
+          "endFrame": 53
         },
         {
-          "text": "的第",
-          "startFrame": 43,
-          "endFrame": 58
+          "text": "Claude",
+          "startFrame": 53,
+          "endFrame": 70
         },
         {
-          "text": "一条视频",
-          "startFrame": 58,
-          "endFrame": 73
+          "text": "和",
+          "startFrame": 70,
+          "endFrame": 88
+        },
+        {
+          "text": "Codex",
+          "startFrame": 88,
+          "endFrame": 106
         }
       ],
       "emphasis": []
     }
   ],
-  "alignedAt": "2026-04-30T08:42:30.193Z",
+  "alignedAt": "2026-05-12T17:36:27.717Z",
   "alignmentSource": "estimated",
-  "wordCount": 5,
+  "wordCount": 6,
   "wordTimingSource": "estimated"
 }

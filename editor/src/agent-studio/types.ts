@@ -122,10 +122,13 @@ export type CodegenStatus = {
   error: string | null;
   result: {sceneId?: string; targetFile?: string; checked?: boolean; dryRun?: boolean} | null;
   logs: string[];
+  commandCount?: number;
+  fileChanges?: {file: string; additions: number; deletions: number}[];
 };
 
 export type AgentActionType =
   | 'save_config'
+  | 'rewrite_scene_pipeline'
   | 'run_tts_scene'
   | 'run_asr_scene'
   | 'generate_design_scene'

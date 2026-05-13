@@ -4,6 +4,9 @@ output/
 
 *.log
 run.pid
+__pycache__/
+*.pyc
+.test-backup/
 
 public/voiceover/*.download.wav
 public/voiceover/*.tmp.*
